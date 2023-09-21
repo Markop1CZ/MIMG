@@ -20,7 +20,7 @@ def ycocg_rgb(pixels):
 
     return numpy.rint(numpy.multiply(numpy.dot(pixels, m), 255)).astype(numpy.uint8)
 
-def subsample(pixels, vertical=0.5, horizontal=0.25):
+def subsample(pixels, vertical=0.25, horizontal=0.5):
     output = scipy.ndimage.zoom(pixels, (horizontal, vertical))
 
     return output
@@ -89,7 +89,8 @@ class ImageCompression:
         return pixels
 
 def test():
-    pil_img = Image.open("test-image.bmp")
+    from io import BytesIO
+    pil_img = Image.open("test-image.bmp") ## <--- test image path
     img = ImageCompression(pil_img)
 
     pix1 = img.get_pixels()
@@ -98,8 +99,13 @@ def test():
     assert pix1.all() == pix2.all(), "yuv conversion fail!"
 
     compressed = img.compress()
+    c_len = len(compressed)
     result = img.decompress(compressed)
     im = Image.fromarray(result)
+    b = BytesIO()
+    pil_img.save(b, format="jpeg")
+    jpg_len = b.getbuffer().nbytes
+    print(c_len, jpg_len)
     im.show()
     
 if __name__ == "__main__": 
