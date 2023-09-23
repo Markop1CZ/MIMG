@@ -17,8 +17,10 @@ def ycocg_rgb(pixels):
     m = [[1, 1, 1],
          [1, 0, -1],
          [-1, 1, -1]]
-    
-    return numpy.rint(numpy.multiply(numpy.dot(pixels, m), 255)).astype(numpy.uint8)
+
+    pixels = numpy.multiply(numpy.dot(pixels, m), 255)
+    pixels = numpy.clip(pixels, 0, 255)
+    return numpy.rint(pixels).astype(numpy.uint8)
 
 ## vertical=0.25, horizontal=0.5
 def subsample(pixels, vertical=0.25, horizontal=0.5):
@@ -48,8 +50,6 @@ class ImageCompression:
         y = y.reshape(y.shape[0], y.shape[1])
         u = subsample(u[:,:,0])
         v = subsample(v[:,:,0])
-
-        print("u={1} v={1}".format(y.shape, u.shape, v.shape))
 
         for channel in y,u,v:
             data = zlib.compress(channel.astype(numpy.single).tobytes())
@@ -87,7 +87,7 @@ class ImageCompression:
 
         pixels = ycocg_rgb(pixels)
 
-        return pixels
+        return pixels, (y,u,v)
 
 def test():
     from io import BytesIO
@@ -107,20 +107,20 @@ def test():
 
         compressed, debug_channels = img.compress()
 
-        output_channels = False
+        compressed_len = len(compressed)
+        output_pixels,debug_channels = img.decompress(compressed)
+        result_img = Image.fromarray(output_pixels)
+
+        output_channels = True
         if output_channels:
             for i, c in enumerate("yuv"):
                 debug_channel = debug_channels[i]
-                channel_data = numpy.full((*debug_channel.shape, 3), 0.0, dtype=numpy.single)
-                channel_data[:,:,0] = numpy.full(debug_channel.shape, 1.0, dtype=numpy.single)
+                channel_data = numpy.empty((*debug_channel.shape, 3), dtype=numpy.single)
+                channel_data[:,:,0] = numpy.full(debug_channel.shape, 0.5, dtype=numpy.single)
                 channel_data[:,:,i] = debug_channel
-                print(c, numpy.min(debug_channel), numpy.max(debug_channel))
                 channel_pixels = ycocg_rgb(channel_data)
                 channel_img = Image.fromarray(channel_pixels, mode="RGB")
                 channel_img.save(os.path.join(output_folder, "{0}-{1}.png".format(img_name, c)))
-        
-        compressed_len = len(compressed)
-        result_img = Image.fromarray(img.decompress(compressed))
 
         ## compare against PNG
         b = BytesIO()
