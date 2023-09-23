@@ -90,23 +90,24 @@ class ImageCompression:
 
 def test():
     from io import BytesIO
-    pil_img = Image.open("test-image.bmp") ## <--- test image path
-    img = ImageCompression(pil_img)
-
-    pix1 = img.get_pixels()
-    pix2 = ycocg_rgb(rgb_ycocg(pix1))
-
-    assert pix1.all() == pix2.all(), "yuv conversion fail!"
-
-    compressed = img.compress()
-    c_len = len(compressed)
-    result = img.decompress(compressed)
-    im = Image.fromarray(result)
-    b = BytesIO()
-    pil_img.save(b, format="jpeg")
-    jpg_len = b.getbuffer().nbytes
-    print(c_len, jpg_len)
-    im.show()
+    import os
     
+    images_folder = "test-images"
+    for file in os.listdir(images_folder):
+        pil_img = Image.open(os.path.join(images_folder, file))
+        img = ImageCompression(pil_img)
+
+        compressed = img.compress()
+        compressed_len = len(compressed)
+        result_img = Image.fromarray(img.decompress(compressed))
+
+        b = BytesIO()
+        pil_img.save(b, format="jpeg")
+        jpeg_len = b.getbuffer().nbytes
+
+        print("{0} - {1}b {2}b = {3:.2f}%".format(file, compressed_len, jpeg_len, (compressed_len/jpeg_len)*100))
+
+        result_img.show()
+          
 if __name__ == "__main__": 
     test()
