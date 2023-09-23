@@ -20,6 +20,7 @@ def ycocg_rgb(pixels):
     
     return numpy.rint(numpy.multiply(numpy.dot(pixels, m), 255)).astype(numpy.uint8)
 
+## vertical=0.25, horizontal=0.5
 def subsample(pixels, vertical=0.25, horizontal=0.5):
     output = scipy.ndimage.zoom(pixels, (horizontal, vertical))
 
@@ -105,14 +106,18 @@ def test():
         img = ImageCompression(pil_img)
 
         compressed, debug_channels = img.compress()
-        for i,c in enumerate(list("yuv")):
-            debug_channel = debug_channels[i]
-            channel_data = numpy.empty((*debug_channel.shape, 3), dtype=numpy.single)
-            channel_data[:,:,i] = debug_channel
-            print(c, numpy.min(debug_channel), numpy.max(debug_channel))
-            channel_pixels = ycocg_rgb(channel_data)
-            channel_img = Image.fromarray(channel_pixels, mode="RGB")
-            channel_img.save(os.path.join(output_folder, "{0}-{1}.png".format(img_name, c)))
+
+        output_channels = False
+        if output_channels:
+            for i, c in enumerate("yuv"):
+                debug_channel = debug_channels[i]
+                channel_data = numpy.full((*debug_channel.shape, 3), 0.0, dtype=numpy.single)
+                channel_data[:,:,0] = numpy.full(debug_channel.shape, 1.0, dtype=numpy.single)
+                channel_data[:,:,i] = debug_channel
+                print(c, numpy.min(debug_channel), numpy.max(debug_channel))
+                channel_pixels = ycocg_rgb(channel_data)
+                channel_img = Image.fromarray(channel_pixels, mode="RGB")
+                channel_img.save(os.path.join(output_folder, "{0}-{1}.png".format(img_name, c)))
         
         compressed_len = len(compressed)
         result_img = Image.fromarray(img.decompress(compressed))
