@@ -54,12 +54,17 @@ class ImageCompression:
         u = subsample(u[:,:,0])
         v = subsample(v[:,:,0])
 
-        for channel in y,u,v:
-            data = zlib.compress(channel.astype(numpy.single).tobytes())
-            length = len(data)
+        for i,channel in enumerate((y,u,v)):
+            if i == 0:
+                channel_data = numpy.rint(numpy.multiply(channel, 255)).astype(numpy.uint8)
+            else:
+                channel_data = numpy.rint(numpy.multiply(numpy.add(channel, 0.5), 255)).astype(numpy.uint8)
+                
+            compressed_data = zlib.compress(channel_data)
+            length = len(compressed_data)
 
             buffer += struct.pack("III", channel.shape[0], channel.shape[1], length)
-            buffer += data
+            buffer += compressed_data
 
         return buffer, (y, u, v)
 
@@ -77,7 +82,13 @@ class ImageCompression:
             data = buffer[0:length]
             del buffer[0:length]
 
-            channels.append(numpy.frombuffer(zlib.decompress(data), numpy.single).reshape(w,h))
+            channel = numpy.frombuffer(zlib.decompress(data), numpy.uint8).astype(numpy.single).reshape(w,h)
+            if i == 0:
+                channel = numpy.divide(channel, 255)
+            else:
+                channel = numpy.add(numpy.divide(channel, 255), -0.5)
+
+            channels.append(channel)
 
         y,u,v = channels
         u = subsample(u, img_h/h, img_w/w)
