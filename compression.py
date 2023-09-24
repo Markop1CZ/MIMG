@@ -30,15 +30,18 @@ def subsample(pixels, vertical=0.25, horizontal=0.5):
     
 class ImageCompression:
     def __init__(self, pil_image):
-        self.pil_image = pil_image.convert("RGB")
+        self._image = pil_image.convert("RGB")
+
+    def get_image(self):
+        return self._image
 
     def get_pixels(self):
-        return numpy.array(self.pil_image)
+        return numpy.array(self._image)
 
     def compress(self):
         print("Compressing image...")
         buffer = bytearray()
-        img_w,img_h = self.pil_image.size
+        img_w,img_h = self._image.size
     
         print("w={0} h={1}".format(img_w, img_h))
 
@@ -80,15 +83,14 @@ class ImageCompression:
         u = subsample(u, img_h/h, img_w/w)
         v = subsample(v, img_h/h, img_w/w)
 
-        pixels = numpy.empty((img_w, img_h, 3), dtype=numpy.single)
-        pixels[:,:,0] = y
-        pixels[:,:,1] = u
-        pixels[:,:,2] = v
-
+        pixels = numpy.dstack((y, u, v))
         pixels = ycocg_rgb(pixels)
 
-        return pixels, (y,u,v)
+        self._image = Image.fromarray(pixels)
 
+        return self._image, (y,u,v)
+
+## Converts all images in "test-image" folder into "test-output" folder and prints stats
 def test():
     from io import BytesIO
     import os
@@ -97,40 +99,66 @@ def test():
     output_folder = "test-output"
     if not os.path.exists(output_folder):
         os.mkdir(output_folder)
-        
+
+    test_stats = []
     for file in os.listdir(images_folder):
         print("Converting {0}:".format(file))
         img_name = os.path.splitext(file)[0]
         
-        pil_img = Image.open(os.path.join(images_folder, file))
+        pil_img = Image.open(os.path.join(images_folder, file)).convert("RGB")
         img = ImageCompression(pil_img)
 
         compressed, debug_channels = img.compress()
 
         compressed_len = len(compressed)
-        output_pixels,debug_channels = img.decompress(compressed)
-        result_img = Image.fromarray(output_pixels)
+        result_img, debug_channels = img.decompress(compressed)
+
+        print("Exporting YUV")
 
         output_channels = True
         if output_channels:
-            for i, c in enumerate("yuv"):
-                debug_channel = debug_channels[i]
+            for i, debug_channel in enumerate(debug_channels):
                 channel_data = numpy.empty((*debug_channel.shape, 3), dtype=numpy.single)
                 channel_data[:,:,0] = numpy.full(debug_channel.shape, 0.5, dtype=numpy.single)
                 channel_data[:,:,i] = debug_channel
                 channel_pixels = ycocg_rgb(channel_data)
                 channel_img = Image.fromarray(channel_pixels, mode="RGB")
-                channel_img.save(os.path.join(output_folder, "{0}-{1}.png".format(img_name, c)))
+                channel_img.save(os.path.join(output_folder, "{0}-chan-{1}.png".format(img_name, i)))
 
+        print("Comparing against PNG/JPEG")
         ## compare against PNG
         b = BytesIO()
         pil_img.save(b, format="png")
         png_len = b.getbuffer().nbytes
+        # JPEG
+        b = BytesIO()
+        pil_img.save(b, format="jpeg")
+        jpeg_len = b.getbuffer().nbytes
 
-        print("-> {0} compressed={1:.2f}Mb png={2:.2f}Mb ratio={3:.2f}%".format(file, compressed_len/1048576, png_len/1048576, (compressed_len/png_len)*100))
+        raw_size_mb = (pil_img.size[0]*pil_img.size[1]*3)/10**6
+        compressed_size_mb = compressed_len/10**6
+        png_size_mb = png_len/10**6
+        jpeg_size_mb = jpeg_len/10**6
 
+        test_stats.append([img_name, *pil_img.size, raw_size_mb, compressed_size_mb, compressed_size_mb/raw_size_mb, png_size_mb, compressed_size_mb/png_size_mb, jpeg_size_mb, compressed_size_mb/jpeg_size_mb])
+
+        print("-> {0} compressed={1:.2f}MB png={2:.2f}MB ratio={3:.2f}% jpg={4:.2f}MB ratio={5:.2f}%".format(file,
+                                                                                                             compressed_size_mb,
+                                                                                                             png_size_mb,
+                                                                                                             (compressed_size_mb/png_size_mb)*100,
+                                                                                                             jpeg_size_mb,
+                                                                                                             (compressed_size_mb/jpeg_size_mb)*100))
+        ## save converted color image and also the original for comparison
         result_img.save(os.path.join(output_folder, img_name+"-color.png"))
+        pil_img.save(os.path.join(output_folder, img_name+"-!orig.png"))
 
+    csv = ""
+    for r in test_stats:
+        for i in r:
+            csv += (i if type(i) == str else str(i).replace(".", ",")) + ";"
+        csv += "\n"
+    print(csv)
+    
 ## should output a single color red image
 def ycocg_test():
     import os
