@@ -4,10 +4,10 @@ import numpy
 import math
 import zlib
 
-def img_to_tiles(img):
+def img_to_tiles(img, size):
     pixels = numpy.array(img)
     
-    tile_w,tile_h = 16,16
+    tile_w,tile_h = size,size
     img_w,img_h = img.size
     last_w, last_h = img_w%tile_w, img_h%tile_h
 
@@ -17,45 +17,47 @@ def img_to_tiles(img):
         for i in range(math.ceil(img_w/tile_w)):
             tile = pixels[j*tile_h:(j+1)*tile_h, i*tile_w:(i+1)*tile_w]
             tiles.append(tile)
-    return math.ceil(img_w/tile_w),math.ceil(img_h/tile_h),tiles
+            
+    return tiles
 
 def tile_to_bytes(img_tile):
-    data = b""
+    buf = b""
     
-    arr = numpy.array(img_tile)
+    pixels = numpy.array(img_tile)
     
-    arr = numpy.divide(arr, 255)
-    arr = dct(dct(arr.T, norm = 'ortho').T, norm = 'ortho')
-    arr = numpy.around(arr, 1)
-    compressed = zlib.compress(arr.astype(numpy.half))
-
-    data += bytes([*arr.shape, len(compressed)]) + compressed
-    return data
+    pixels = numpy.divide(pixels, 255)
+    pixels = dct(dct(pixels.T, norm = 'ortho').T, norm = 'ortho')
+    pixels = numpy.add(numpy.around(pixels, 1), 0.0)
+    ##print(arr)
+    
+    compressed = zlib.compress(pixels.astype(numpy.half))
+    buf += bytes([*pixels.shape, len(compressed)]) + compressed
+    
+    return buf
 
 def read_tiles(data):
     offset = 0
-
     tiles = []
 
     while offset < len(data):
         w,h,length = data[offset:offset+3]
-        arr = numpy.frombuffer(zlib.decompress(data[offset+3:offset+3+length]), numpy.half).reshape(w, h)
+        pixels = numpy.frombuffer(zlib.decompress(data[offset+3:offset+3+length]), numpy.half).reshape(w, h)
+        
         offset += length+3
         
-        arr = idct(idct(arr.T, norm = 'ortho').T, norm = 'ortho')
+        pixels = idct(idct(pixels.T, norm = 'ortho').T, norm = 'ortho')
+        pixels = numpy.clip(numpy.rint(numpy.multiply(pixels, 255)), 0, 255).astype(numpy.uint8)
 
-        arr = numpy.clip(numpy.rint(numpy.multiply(arr, 255)), 0, 255).astype(numpy.uint8)
-
-        tiles.append(arr)
+        tiles.append(pixels)
 
     return tiles
 
 def test():
-    im = Image.open("dct-test-2.png").convert("L")
-
+    tile_size = 16
+    im = Image.open("dct-test.png").convert("L")
     w,h = im.size
-
-    tilesi,tilesj,tiles = img_to_tiles(im)
+    
+    tiles = img_to_tiles(im, tile_size)
 
     buf = b""
     for t in tiles:
@@ -63,16 +65,18 @@ def test():
 
     print(len(buf))
 
-    tiles2 = read_tiles(buf)
-    im2 = Image.new("L", (w,h))
+    decompressed_tiles = read_tiles(buf)
+    output_image = Image.new("L", (w,h))
     num = 0
-    for j in range(tilesj):
-        for i in range(tilesi):
-            tile = Image.fromarray(tiles2[num], "L")
-            im2.paste(tile, (i*16, j*16))
+    
+    for j in range(math.ceil(h/tile_size)):
+        for i in range(math.ceil(w/tile_size)):
+            tile = Image.fromarray(decompressed_tiles[num], "L")
+            output_image.paste(tile, (i*tile_size, j*tile_size))
+            
             num += 1
 
-    im2.save("test.png")
+    output_image.save("dct-test-out.png")
     
 if __name__ == "__main__":
     test()
