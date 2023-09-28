@@ -56,9 +56,9 @@ class ImageCompression:
 
         for i,channel in enumerate((y,u,v)):
             if i == 0:
-                channel_data = numpy.rint(numpy.multiply(channel, 255)).astype(numpy.uint8)
+                channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 255), 0, 255)).astype(numpy.uint8)
             else:
-                channel_data = numpy.rint(numpy.multiply(numpy.add(channel, 0.5), 255)).astype(numpy.uint8)
+                channel_data = numpy.rint(numpy.clip(numpy.multiply(numpy.add(channel, 0.5), 255), 0, 255)).astype(numpy.uint8)
                 
             compressed_data = zlib.compress(channel_data)
             length = len(compressed_data)
