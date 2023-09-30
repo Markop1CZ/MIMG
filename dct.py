@@ -5,6 +5,8 @@ import math
 import zlib
 import struct
 
+## https://docs.python.org/3/library/struct.html#format-characters
+
 def img_to_tiles(img, size):
     pixels = numpy.array(img)
     
@@ -32,7 +34,8 @@ def tile_to_bytes(img_tile):
     ##print(arr)
     
     compressed = zlib.compress(pixels.astype(numpy.half).tobytes())
-    buf += bytes([*pixels.shape, len(compressed)]) + compressed
+    buf += struct.pack("BBH", *pixels.shape, len(compressed)) 
+    buf += compressed
     
     return buf
 
@@ -41,10 +44,10 @@ def read_tiles(data):
     tiles = []
 
     while offset < len(data):
-        w,h,length = data[offset:offset+3]
-        pixels = numpy.frombuffer(zlib.decompress(data[offset+3:offset+3+length]), numpy.half).reshape(w, h)
-        
-        offset += length+3
+        w,h,length = struct.unpack("BBH", data[offset:offset+4])
+        offset += 4
+        pixels = numpy.frombuffer(zlib.decompress(data[offset:offset+length]), numpy.half).reshape(w, h)
+        offset += length
         
         pixels = idct(idct(pixels.T, norm = 'ortho').T, norm = 'ortho')
         pixels = numpy.clip(numpy.rint(numpy.multiply(pixels, 255)), 0, 255).astype(numpy.uint8)
@@ -59,14 +62,14 @@ def write_image_tiles(im, tile_size):
 
     tiles = img_to_tiles(im, tile_size)
     
-    buf = struct.pack("IIbb", *im.size, *tile_size)
+    buf = struct.pack("IIBB", *im.size, *tile_size)
     for t in tiles:
         buf += tile_to_bytes(t)
 
     return buf
 
 def read_image_tiles(buf):
-    im_w,im_h,tile_w,tile_h = struct.unpack("IIbb", buf[:10])
+    im_w,im_h,tile_w,tile_h = struct.unpack("IIBB", buf[:10])
 
     decompressed_tiles = read_tiles(buf[10:])
     output_image = Image.new("L", (im_w,im_h))
