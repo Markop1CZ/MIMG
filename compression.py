@@ -3,6 +3,7 @@ import math
 import struct
 import scipy
 import zlib
+from scipy.fftpack import dct, idct
 from PIL import Image
 
 ## Using YCoCg
@@ -22,9 +23,58 @@ def ycocg_rgb(pixels):
     pixels = numpy.clip(pixels, 0, 255)
     return numpy.rint(pixels).astype(numpy.uint8)
 
+def compress_channel_dct(pixels, tile_size=(16, 16)):
+    tile_w,tile_h = tile_size
+    img_h,img_w = pixels.shape
+
+    buf = struct.pack("HH", tile_w, tile_h)
+
+    for j in range(math.ceil(img_h/tile_h)):
+        for i in range(math.ceil(img_w/tile_w)):
+            tile = pixels[j*tile_h:(j+1)*tile_h, i*tile_w:(i+1)*tile_w]
+            
+            tile = dct(dct(tile.T, norm = 'ortho').T, norm = 'ortho')
+            tile = numpy.add(numpy.around(tile, 1), 0.0)
+    
+            compressed = zlib.compress(tile.astype(numpy.half).tobytes())
+            buf += struct.pack("BBH", *tile.shape[::-1], len(compressed)) 
+            buf += compressed
+    
+    return buf
+
+def decompress_channel_dct(buf, img_w, img_h):
+    offset = 0
+    tile_w,tile_h = struct.unpack("HH", buf[offset:offset+4])
+    offset += 4
+
+    output_pixels = numpy.zeros((img_h, img_w))
+
+    print(img_w, img_h)
+    
+    i = 0
+    j = 0
+    while offset < len(buf):
+        cur_w,cur_h,length = struct.unpack("BBH", buf[offset:offset+4])
+        offset += 4
+        pixels = numpy.frombuffer(zlib.decompress(buf[offset:offset+length]), numpy.half).reshape(cur_h, cur_w)
+        offset += length
+        
+        pixels = idct(idct(pixels.T, norm = 'ortho').T, norm = 'ortho')
+
+        ##print(i, j, cur_w, cur_h, pixels.shape)
+        output_pixels[j:j+cur_h, i:i+cur_w] = pixels
+        
+        i += cur_w
+        if i >= img_w:
+            i = 0
+            j += cur_h
+    print(output_pixels)
+    print(output_pixels.shape)
+    return output_pixels
+
 ## vertical=0.25, horizontal=0.5
-def subsample(pixels, vertical=0.25, horizontal=0.5):
-    output = scipy.ndimage.zoom(pixels, (horizontal, vertical))
+def subsample(pixels, horizontal=0.5, vertical=0.25):
+    output = scipy.ndimage.zoom(pixels, (vertical, horizontal))
 
     return output
     
@@ -55,22 +105,25 @@ class ImageCompression:
         v = subsample(v[:,:,0])
 
         for i,channel in enumerate((y,u,v)):
-            if i == 0:
-                channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 255), 0, 255)).astype(numpy.uint8)
-            else:
-                channel_data = numpy.rint(numpy.clip(numpy.multiply(numpy.add(channel, 0.5), 255), 0, 255)).astype(numpy.uint8)
-                
-            compressed_data = zlib.compress(channel_data)
+            ##if i == 0:
+            ##    channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 255), 0, 255)).astype(numpy.uint8)
+            ##else:
+            ##    channel_data = numpy.rint(numpy.clip(numpy.multiply(numpy.add(channel, 0.5), 255), 0, 255)).astype(numpy.uint8)
+
+            ##print(len(compress_channel_dct(channel_data)))
+            chan_h,chan_w = channel.shape
+            compressed_data = compress_channel_dct(channel)
+            ##compressed_data = zlib.compress(channel_data)
             length = len(compressed_data)
 
-            buffer += struct.pack("III", channel.shape[0], channel.shape[1], length)
+            buffer += struct.pack("III", chan_w, chan_h, length)
             buffer += compressed_data
 
         return buffer, (y, u, v)
 
     def decompress(self, buffer):
         print("Decompressing image...")
-        img_h,img_w = struct.unpack("II", buffer[0:8])
+        img_w,img_h = struct.unpack("II", buffer[0:8])
         del buffer[0:8]
 
         channels = []
@@ -82,17 +135,18 @@ class ImageCompression:
             data = buffer[0:length]
             del buffer[0:length]
 
-            channel = numpy.frombuffer(zlib.decompress(data), numpy.uint8).astype(numpy.single).reshape(w,h)
-            if i == 0:
-                channel = numpy.divide(channel, 255)
-            else:
-                channel = numpy.add(numpy.divide(channel, 255), -0.5)
+            channel = decompress_channel_dct(data, w, h)
+            ##channel = numpy.frombuffer(zlib.decompress(data), numpy.uint8).astype(numpy.single).reshape(w,h)
+            ##if i == 0:
+            ##    channel = numpy.divide(channel, 255)
+            ##else:
+            ##    channel = numpy.add(numpy.divide(channel, 255), -0.5)
 
             channels.append(channel)
 
         y,u,v = channels
-        u = subsample(u, img_h/h, img_w/w)
-        v = subsample(v, img_h/h, img_w/w)
+        u = subsample(u, img_w/w, img_h/h)
+        v = subsample(v, img_w/w, img_h/h)
 
         pixels = numpy.dstack((y, u, v))
         pixels = ycocg_rgb(pixels)

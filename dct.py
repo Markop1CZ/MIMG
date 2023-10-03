@@ -7,11 +7,19 @@ import struct
 
 ## https://docs.python.org/3/library/struct.html#format-characters
 
-def img_to_tiles(img, size):
+## only single channel images
+def img_to_tiles(img, tile_size):
     pixels = numpy.array(img)
+
+    if len(pixels.shape) != 2:
+        raise Exception("Only single channel image supported!")
+
+    return channel_to_tiles(pixels, tile_size)
     
-    tile_w,tile_h = size
-    img_w,img_h = img.size
+
+def channel_to_tiles(pixels, tile_size):
+    tile_w,tile_h = tile_size
+    img_h,img_w = pixels.shape
     last_w, last_h = img_w%tile_w, img_h%tile_h
 
     tiles = []
@@ -38,6 +46,9 @@ def tile_to_bytes(img_tile):
     buf += compressed
     
     return buf
+
+## todo: read tiles buffer into a numpy array of pixels (not numpy image)
+##       important for generic usage
 
 def read_tiles(data):
     offset = 0
@@ -87,7 +98,7 @@ def read_image_tiles(buf):
 ## test
 def test():
     tile_size = 16
-    im = Image.open("dct-test.png").convert("L")
+    im = Image.open("dct-test.png")
     w,h = im.size
     
     buf = write_image_tiles(im, (tile_size, tile_size))
