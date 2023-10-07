@@ -23,7 +23,16 @@ def ycocg_rgb(pixels):
     pixels = numpy.clip(pixels, 0, 255)
     return numpy.rint(pixels).astype(numpy.uint8)
 
-def compress_channel_dct(pixels, tile_size=(16, 16)):
+dct_quant = numpy.array([[8,  12,  24,  36,  11, 13, 15, 18],
+                         [5,  7,  9,  11, 13, 15, 17, 23],
+                         [7,  9,  11, 13, 15, 17, 19, 43],
+                         [9,  11, 13, 15, 17, 19, 21, 62],
+                         [11, 13, 15, 17, 19, 21, 42, 77],
+                         [13, 15, 17, 19, 21, 38, 76, 86],
+                         [15, 17, 19, 27, 38, 45, 77, 95],
+                         [19, 28, 46, 62, 75, 88, 98, 101]])
+
+def compress_channel_dct(pixels, tile_size=(8, 8)):
     tile_w,tile_h = tile_size
     img_h,img_w = pixels.shape
 
@@ -32,8 +41,11 @@ def compress_channel_dct(pixels, tile_size=(16, 16)):
     for j in range(math.ceil(img_h/tile_h)):
         for i in range(math.ceil(img_w/tile_w)):
             tile = pixels[j*tile_h:(j+1)*tile_h, i*tile_w:(i+1)*tile_w]
+
+            tile_c = numpy.copy(tile)
             
             tile = dct(dct(tile.T, norm = 'ortho').T, norm = 'ortho')
+            tile = numpy.divide(tile, dct_quant[:tile.shape[0], :tile.shape[1]])
             tile = numpy.add(numpy.around(tile, 1), 0.0)
     
             compressed = zlib.compress(tile.astype(numpy.half).tobytes())
@@ -58,7 +70,8 @@ def decompress_channel_dct(buf, img_w, img_h):
         offset += 4
         pixels = numpy.frombuffer(zlib.decompress(buf[offset:offset+length]), numpy.half).reshape(cur_h, cur_w)
         offset += length
-        
+
+        pixels = numpy.multiply(pixels, dct_quant[:pixels.shape[0], :pixels.shape[1]])
         pixels = idct(idct(pixels.T, norm = 'ortho').T, norm = 'ortho')
 
         ##print(i, j, cur_w, cur_h, pixels.shape)
@@ -68,8 +81,7 @@ def decompress_channel_dct(buf, img_w, img_h):
         if i >= img_w:
             i = 0
             j += cur_h
-    print(output_pixels)
-    print(output_pixels.shape)
+            
     return output_pixels
 
 ## vertical=0.25, horizontal=0.5
