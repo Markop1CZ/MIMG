@@ -23,7 +23,7 @@ def ycocg_rgb(pixels):
     pixels = numpy.clip(pixels, 0, 255)
     return numpy.rint(pixels).astype(numpy.uint8)
 
-dct_quant = numpy.array([[8,  12,  24,  36,  11, 13, 15, 18],
+dct_quant = numpy.array([[8,  12, 24, 36, 11, 13, 15, 18],
                          [5,  7,  9,  11, 13, 15, 17, 23],
                          [7,  9,  11, 13, 15, 17, 19, 43],
                          [9,  11, 13, 15, 17, 19, 21, 62],
@@ -32,57 +32,65 @@ dct_quant = numpy.array([[8,  12,  24,  36,  11, 13, 15, 18],
                          [15, 17, 19, 27, 38, 45, 77, 95],
                          [19, 28, 46, 62, 75, 88, 98, 101]])
 
-def compress_channel_dct(pixels, tile_size=(8, 8)):
-    tile_w,tile_h = tile_size
+def compress_channel_dct(pixels, tile_size=8):
     img_h,img_w = pixels.shape
 
-    buf = struct.pack("HH", tile_w, tile_h)
+    buf = struct.pack("H", tile_size)
 
-    for j in range(math.ceil(img_h/tile_h)):
-        for i in range(math.ceil(img_w/tile_w)):
-            tile = pixels[j*tile_h:(j+1)*tile_h, i*tile_w:(i+1)*tile_w]
+    for j in range(math.ceil(img_h/tile_size)):
+        for i in range(math.ceil(img_w/tile_size)):
+            tile = numpy.zeros((tile_size, tile_size))
+            tmp = pixels[j*tile_size:(j+1)*tile_size, i*tile_size:(i+1)*tile_size]
+            tile[0:tmp.shape[0],0:tmp.shape[1]] = tmp
 
-            tile_c = numpy.copy(tile)
+            ## mirror pixels in order to make the tiles square
+            h_d = tile.shape[0]-tmp.shape[0]
+            w_d = tile.shape[1]-tmp.shape[1]
+            tile[tmp.shape[0]:] = tile[tmp.shape[0]-h_d-1:tile.shape[0]-h_d-1][::-1]
+            tile[:,tmp.shape[1]:] = tile[:,tmp.shape[1]-w_d-1:tile.shape[1]-w_d-1][::-1]
             
             tile = dct(dct(tile.T, norm = 'ortho').T, norm = 'ortho')
             tile = numpy.divide(tile, dct_quant[:tile.shape[0], :tile.shape[1]])
             tile = numpy.add(numpy.around(tile, 1), 0.0)
+            tile = tile.astype(numpy.int8)
+
+            ##tile = numpy.concatenate([numpy.diagonal(tile[::-1,:], k)[::(2*(k % 2)-1)] for k in range(1-tile.shape[0], tile.shape[1])])
     
-            compressed = zlib.compress(tile.astype(numpy.half).tobytes())
-            buf += struct.pack("BBH", *tile.shape[::-1], len(compressed)) 
+            compressed = zlib.compress(tile.tobytes())
+            buf += struct.pack("H", len(compressed)) 
             buf += compressed
+
+            ##print(tile, len(compressed))
     
     return buf
 
 def decompress_channel_dct(buf, img_w, img_h):
     offset = 0
-    tile_w,tile_h = struct.unpack("HH", buf[offset:offset+4])
-    offset += 4
+    tile_size, = struct.unpack("H", buf[offset:offset+2])
+    offset += 2
 
-    output_pixels = numpy.zeros((img_h, img_w))
+    output_pixels = numpy.zeros((img_h + tile_size, img_w + tile_size))
 
     print(img_w, img_h)
-    
     i = 0
     j = 0
     while offset < len(buf):
-        cur_w,cur_h,length = struct.unpack("BBH", buf[offset:offset+4])
-        offset += 4
-        pixels = numpy.frombuffer(zlib.decompress(buf[offset:offset+length]), numpy.half).reshape(cur_h, cur_w)
+        length, = struct.unpack("H", buf[offset:offset+2])
+        offset += 2
+        pixels = numpy.frombuffer(zlib.decompress(buf[offset:offset+length]), numpy.int8).reshape(tile_size, tile_size)
         offset += length
 
         pixels = numpy.multiply(pixels, dct_quant[:pixels.shape[0], :pixels.shape[1]])
         pixels = idct(idct(pixels.T, norm = 'ortho').T, norm = 'ortho')
 
-        ##print(i, j, cur_w, cur_h, pixels.shape)
-        output_pixels[j:j+cur_h, i:i+cur_w] = pixels
+        output_pixels[j:j+tile_size, i:i+tile_size] = pixels
         
-        i += cur_w
+        i += tile_size
         if i >= img_w:
             i = 0
-            j += cur_h
+            j += tile_size
             
-    return output_pixels
+    return output_pixels[0:img_h, 0:img_w]
 
 ## vertical=0.25, horizontal=0.5
 def subsample(pixels, horizontal=0.5, vertical=0.25):
@@ -117,14 +125,17 @@ class ImageCompression:
         v = subsample(v[:,:,0])
 
         for i,channel in enumerate((y,u,v)):
-            ##if i == 0:
-            ##    channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 255), 0, 255)).astype(numpy.uint8)
-            ##else:
-            ##    channel_data = numpy.rint(numpy.clip(numpy.multiply(numpy.add(channel, 0.5), 255), 0, 255)).astype(numpy.uint8)
+            print(channel.min(), channel.max())
+            if i == 0: ## y channel range: -128 127
+                channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 128), -128, 127)).astype(numpy.int8)
+            else: ## u v channel range: -128 127
+                channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 256), -128, 127)).astype(numpy.int8)
+                
+            print(channel_data.min(), channel_data.max())
 
             ##print(len(compress_channel_dct(channel_data)))
             chan_h,chan_w = channel.shape
-            compressed_data = compress_channel_dct(channel)
+            compressed_data = compress_channel_dct(channel_data)
             ##compressed_data = zlib.compress(channel_data)
             length = len(compressed_data)
 
@@ -149,10 +160,10 @@ class ImageCompression:
 
             channel = decompress_channel_dct(data, w, h)
             ##channel = numpy.frombuffer(zlib.decompress(data), numpy.uint8).astype(numpy.single).reshape(w,h)
-            ##if i == 0:
-            ##    channel = numpy.divide(channel, 255)
-            ##else:
-            ##    channel = numpy.add(numpy.divide(channel, 255), -0.5)
+            if i == 0:
+                channel = numpy.divide(channel, 128)
+            else:
+                channel = numpy.divide(channel, 256)
 
             channels.append(channel)
 
