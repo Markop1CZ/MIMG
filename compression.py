@@ -3,6 +3,10 @@ import math
 import struct
 import scipy
 import zlib
+import os
+import signal
+import traceback
+from io import BytesIO
 from scipy.fftpack import dct, idct
 from PIL import Image
 
@@ -53,14 +57,10 @@ def compress_channel_dct(pixels, tile_size=8):
             tile = numpy.divide(tile, dct_quant[:tile.shape[0], :tile.shape[1]])
             tile = numpy.add(numpy.around(tile, 1), 0.0)
             tile = tile.astype(numpy.int8)
-
-            ##tile = numpy.concatenate([numpy.diagonal(tile[::-1,:], k)[::(2*(k % 2)-1)] for k in range(1-tile.shape[0], tile.shape[1])])
     
             compressed = zlib.compress(tile.tobytes())
             buf += struct.pack("H", len(compressed)) 
             buf += compressed
-
-            ##print(tile, len(compressed))
     
     return buf
 
@@ -70,8 +70,7 @@ def decompress_channel_dct(buf, img_w, img_h):
     offset += 2
 
     output_pixels = numpy.zeros((img_h + tile_size, img_w + tile_size))
-
-    print(img_w, img_h)
+    
     i = 0
     j = 0
     while offset < len(buf):
@@ -109,7 +108,6 @@ class ImageCompression:
         return numpy.array(self._image)
 
     def compress(self):
-        print("Compressing image...")
         buffer = bytearray()
         img_w,img_h = self._image.size
     
@@ -125,18 +123,14 @@ class ImageCompression:
         v = subsample(v[:,:,0])
 
         for i,channel in enumerate((y,u,v)):
-            print(channel.min(), channel.max())
             if i == 0: ## y channel range: -128 127
                 channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 128), -128, 127)).astype(numpy.int8)
             else: ## u v channel range: -128 127
                 channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 256), -128, 127)).astype(numpy.int8)
-                
-            print(channel_data.min(), channel_data.max())
 
-            ##print(len(compress_channel_dct(channel_data)))
             chan_h,chan_w = channel.shape
             compressed_data = compress_channel_dct(channel_data)
-            ##compressed_data = zlib.compress(channel_data)
+            
             length = len(compressed_data)
 
             buffer += struct.pack("III", chan_w, chan_h, length)
@@ -145,7 +139,6 @@ class ImageCompression:
         return buffer, (y, u, v)
 
     def decompress(self, buffer):
-        print("Decompressing image...")
         img_w,img_h = struct.unpack("II", buffer[0:8])
         del buffer[0:8]
 
@@ -178,33 +171,22 @@ class ImageCompression:
 
         return self._image, (y,u,v)
 
-## Converts all images in "test-image" folder into "test-output" folder and prints stats
-def test():
-    from io import BytesIO
-    import os
-    
-    images_folder = "test-images"
-    output_folder = "test-output"
-    if not os.path.exists(output_folder):
-        os.mkdir(output_folder)
+## TEST
+def _multiprocess_convert_image(filename, output_folder, debug_yuv=True):
+    try:
+        print("Converting: {0}".format(filename))
 
-    test_stats = []
-    for file in os.listdir(images_folder):
-        print("Converting {0}:".format(file))
-        img_name = os.path.splitext(file)[0]
-        
-        pil_img = Image.open(os.path.join(images_folder, file)).convert("RGB")
+        img_name = os.path.splitext(os.path.basename(filename))[0]
+        pil_img = Image.open(filename).convert("RGB")
         img = ImageCompression(pil_img)
 
         compressed, debug_channels = img.compress()
-
         compressed_len = len(compressed)
         result_img, debug_channels = img.decompress(compressed)
 
-        print("Exporting YUV")
-
-        output_channels = True
-        if output_channels:
+        ## Debug output if requested
+        if debug_yuv:
+            print("Exporting YUV")
             for i, debug_channel in enumerate(debug_channels):
                 channel_data = numpy.empty((*debug_channel.shape, 3), dtype=numpy.single)
                 channel_data[:,:,0] = numpy.full(debug_channel.shape, 0.5, dtype=numpy.single)
@@ -213,11 +195,14 @@ def test():
                 channel_img = Image.fromarray(channel_pixels, mode="RGB")
                 channel_img.save(os.path.join(output_folder, "{0}-chan-{1}.png".format(img_name, i)))
 
+        ## Comparison
         print("Comparing against PNG/JPEG")
-        ## compare against PNG
+            
+        ## Compare against PNG
         b = BytesIO()
         pil_img.save(b, format="png")
         png_len = b.getbuffer().nbytes
+        
         # JPEG
         b = BytesIO()
         pil_img.save(b, format="jpeg")
@@ -228,20 +213,68 @@ def test():
         png_size_mb = png_len/10**6
         jpeg_size_mb = jpeg_len/10**6
 
-        test_stats.append([img_name, *pil_img.size, raw_size_mb, compressed_size_mb, compressed_size_mb/raw_size_mb, png_size_mb, compressed_size_mb/png_size_mb, jpeg_size_mb, compressed_size_mb/jpeg_size_mb])
-
-        print("-> {0} compressed={1:.2f}MB png={2:.2f}MB ratio={3:.2f}% jpg={4:.2f}MB ratio={5:.2f}%".format(file,
-                                                                                                             compressed_size_mb,
-                                                                                                             png_size_mb,
-                                                                                                             (compressed_size_mb/png_size_mb)*100,
-                                                                                                             jpeg_size_mb,
-                                                                                                             (compressed_size_mb/jpeg_size_mb)*100))
-        ## save converted color image and also the original for comparison
+        print("-> {0} compressed={1:.2f}MB png={2:.2f}MB ratio={3:.2f}% jpg={4:.2f}MB ratio={5:.2f}%".format(img_name,
+                                                                                                            compressed_size_mb,
+                                                                                                            png_size_mb,
+                                                                                                            (compressed_size_mb/png_size_mb)*100,
+                                                                                                            jpeg_size_mb,
+                                                                                                            (compressed_size_mb/jpeg_size_mb)*100))
+        ## Save converted color image and also the original for comparison
         result_img.save(os.path.join(output_folder, img_name+"-color.png"))
         pil_img.save(os.path.join(output_folder, img_name+"-!orig.png"))
 
+        return [img_name, *pil_img.size, raw_size_mb, compressed_size_mb, compressed_size_mb/raw_size_mb, png_size_mb, compressed_size_mb/png_size_mb, jpeg_size_mb, compressed_size_mb/jpeg_size_mb]
+    except Exception as e:
+        print("[!] Error with file {0}: {1}".format(filename, e))
+        traceback.print_exc()
+
+def init_worker():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+## Converts all images in "test-image" folder into "test-output" folder and returns statistics
+def test_convert_folder_threaded(input_folder, output_folder, debug_yuv=True, num_threads=6):
+    if not os.path.exists(output_folder):
+        os.mkdir(output_folder)
+
+    for fn in os.listdir(output_folder):
+        f = os.path.join(output_folder, fn)
+        if os.path.isfile(f):
+            os.remove(f)
+
+    images = [os.path.join(input_folder, f) for f in os.listdir(input_folder)]
+    test_stats = []
+    pending = []
+    results = []
+
+    pool = multiprocessing.Pool(multiprocessing.cpu_count(), init_worker)
+    try:
+        for img in images:
+            r = pool.apply_async(_multiprocess_convert_image, (img, output_folder, debug_yuv))
+            pending.append(r)
+
+        while len(pending) > 0:
+            r = pending.pop(0)
+            r = r.get()
+            if r != None:
+                results.append(r)
+        
+        pool.close()
+        pool.join()
+    except KeyboardInterrupt:
+        pool.terminate()
+        pool.join()
+            
+    return results
+    
+def test():
+    images_folder = "test-images"
+    output_folder = "test-output"
+
+    stats = test_convert_folder_threaded(images_folder, output_folder, num_threads=1)
+    print(stats)
+
     csv = ""
-    for r in test_stats:
+    for r in stats:
         for i in r:
             csv += (i if type(i) == str else str(i).replace(".", ",")) + ";"
         csv += "\n"
@@ -249,7 +282,6 @@ def test():
     
 ## should output a single color red image
 def ycocg_test():
-    import os
     w,h = 256, 256
     channel_data = numpy.full((w, h, 3), 0, dtype=numpy.single)
     channel_data[:,:,0] = numpy.full((w, h), 1/4, dtype=numpy.single)
@@ -259,6 +291,8 @@ def ycocg_test():
     channel_img = Image.fromarray(channel_pixels, mode="RGB")
     channel_img.save("ycocg-test.png")
           
-if __name__ == "__main__": 
+if __name__ == "__main__":
+    import multiprocessing
+    
     test()
     ycocg_test()
