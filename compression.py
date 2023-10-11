@@ -25,14 +25,14 @@ def ycocg_rgb(pixels):
     pixels = numpy.clip(pixels, 0, 255)
     return numpy.rint(pixels).astype(numpy.uint8)
 
-dct_quant = numpy.array([[1,  1,  2,  4,  8,  16, 32, 64],
-                         [1,  1,  2,  4,  8,  16, 32, 64],
-                         [2,  2,  2,  4,  8,  16, 32, 64],
-                         [4,  4,  4,  4,  8,  16, 32, 64],
-                         [8,  8,  8,  8,  8,  16, 32, 64],
-                         [16, 16, 16, 16, 16, 16, 32, 64],
-                         [32, 32, 32, 32, 32, 32, 32, 64],
-                         [64, 64, 64, 64, 64, 64, 64, 64]])
+dct_quant = numpy.array([[8,  9,  11, 12, 14, 16, 21, 25],
+                         [9,  11, 12, 14, 16, 20, 24, 28],
+                         [11, 12, 14, 16, 19, 23, 26, 43],
+                         [12, 14, 16, 18, 22, 22, 21, 62],
+                         [14, 16, 18, 21, 23, 21, 42, 77],
+                         [16, 19, 22, 25, 21, 38, 76, 86],
+                         [20, 23, 25, 37, 38, 77, 82, 95],
+                         [24, 28, 46, 62, 75, 88, 98, 101]])
 
 def compress_channel_dct(pixels, tile_size=8):
     img_h,img_w = pixels.shape
@@ -55,16 +55,15 @@ def compress_channel_dct(pixels, tile_size=8):
             tile = dct(dct(tile.T, norm = 'ortho').T, norm = 'ortho')
             tile = numpy.divide(tile, dct_quant)
             tile = numpy.add(numpy.around(tile, 0), 0.0)
-            print(tile.min(), tile.max())
             tile = tile.astype(numpy.int8)
 
+            print(tile)
+            
             ##tile = numpy.concatenate([numpy.diagonal(tile[::-1,:], k)[::(2*(k % 2)-1)] for k in range(1-tile.shape[0], tile.shape[1])])
     
             compressed = zlib.compress(tile.tobytes())
             buf += struct.pack("H", len(compressed)) 
             buf += compressed
-
-            ##print(tile, len(compressed))
     
     return buf
 
@@ -193,7 +192,7 @@ def test_convert_folder(input_folder, output_folder, debug_yuv=True):
             os.remove(f)
 
     test_stats = []
-    for file in ["photo-02.png"]:##os.listdir(input_folder):
+    for file in os.listdir(input_folder):
         print("Converting {0}:".format(file))
         img_name = os.path.splitext(file)[0]
         
@@ -201,6 +200,10 @@ def test_convert_folder(input_folder, output_folder, debug_yuv=True):
         img = ImageCompression(pil_img)
 
         compressed, debug_channels = img.compress()
+
+        f = open(os.path.join("test-output-bin", img_name+".buf"), "wb")
+        f.write(compressed)
+        f.close()
 
         compressed_len = len(compressed)
         result_img, debug_channels = img.decompress(compressed)
