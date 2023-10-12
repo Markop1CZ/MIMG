@@ -39,6 +39,8 @@ def compress_channel_dct(pixels, tile_size=8):
 
     buf = struct.pack("H", tile_size)
 
+    tiles = None
+
     for j in range(math.ceil(img_h/tile_size)):
         for i in range(math.ceil(img_w/tile_size)):
             tile = numpy.zeros((tile_size, tile_size))
@@ -57,13 +59,23 @@ def compress_channel_dct(pixels, tile_size=8):
             tile = numpy.add(numpy.around(tile, 0), 0.0)
             tile = tile.astype(numpy.int8)
 
-            print(tile)
+            if tiles is None:
+                tiles = tile[:].reshape(64)
+            else:
+                tiles = numpy.vstack([tiles, tile.reshape(64)])
             
             ##tile = numpy.concatenate([numpy.diagonal(tile[::-1,:], k)[::(2*(k % 2)-1)] for k in range(1-tile.shape[0], tile.shape[1])])
     
             compressed = zlib.compress(tile.tobytes())
             buf += struct.pack("H", len(compressed)) 
             buf += compressed
+
+    tiles = sorted(tiles, key=scipy.stats.entropy)
+    buf = struct.pack("H", tile_size)
+    for k in tiles:
+        c = zlib.compress(numpy.array(k).astype(numpy.int8).tobytes())
+        buf += struct.pack("H", len(c)) + c
+        
     
     return buf
 
@@ -145,10 +157,11 @@ class ImageCompression:
             buffer += struct.pack("III", chan_w, chan_h, length)
             buffer += compressed_data
 
-        return buffer, (y, u, v)
+        return zlib.compress(buffer), (y, u, v)
 
     def decompress(self, buffer):
         print("Decompressing image...")
+        buffer = bytearray(zlib.decompress(buffer))
         img_w,img_h = struct.unpack("II", buffer[0:8])
         del buffer[0:8]
 
@@ -201,7 +214,10 @@ def test_convert_folder(input_folder, output_folder, debug_yuv=True):
 
         compressed, debug_channels = img.compress()
 
-        f = open(os.path.join("test-output-bin", img_name+".buf"), "wb")
+        debug_folder = "test-output-bin"
+        if not os.path.exists(debug_folder):
+            os.mkdir(debug_folder)
+        f = open(os.path.join(debug_folder, img_name+".buf"), "wb")
         f.write(compressed)
         f.close()
 
