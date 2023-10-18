@@ -45,14 +45,8 @@ def compress_channel_dct(pixels, tile_size=8):
         for i in range(math.ceil(img_w/tile_size)):
             tile = numpy.zeros((tile_size, tile_size))
             tmp = pixels[j*tile_size:(j+1)*tile_size, i*tile_size:(i+1)*tile_size]
+            
             tile[0:tmp.shape[0],0:tmp.shape[1]] = tmp
-
-            ## mirror pixels in order to make the tiles square
-            ##h_d = tile.shape[0]-tmp.shape[0]
-            ##w_d = tile.shape[1]-tmp.shape[1]
-
-            ##tile[tmp.shape[0]:] = tile[tmp.shape[0]-h_d-1:tile.shape[0]-h_d-1][::-1]
-            ##tile[:,tmp.shape[1]:] = tile[:,tmp.shape[1]-w_d-1:tile.shape[1]-w_d-1][::-1]
             
             tile = dct(dct(tile.T, norm = 'ortho').T, norm = 'ortho')
             tile = numpy.divide(tile, dct_quant)
