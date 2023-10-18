@@ -1,4 +1,5 @@
-test-output
-test-output-bin
+test-images-output
+test-images-output-bin
 ycocg-test.png
 dct-test-out.png
+__pycache__
