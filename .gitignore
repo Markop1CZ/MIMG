@@ -1,5 +1,7 @@
 test-images-output
 test-images-output-bin
+test-random-images
+test-random-images-output
 ycocg-test.png
 dct-test-out.png
 __pycache__

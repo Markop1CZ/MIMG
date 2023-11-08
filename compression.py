@@ -25,56 +25,43 @@ def ycocg_rgb(pixels):
     pixels = numpy.clip(pixels, 0, 255)
     return numpy.rint(pixels).astype(numpy.uint8)
 
-dct_quant = numpy.array([[8,  9,  11, 12, 14, 16, 21, 25],
-                         [9,  11, 12, 14, 16, 20, 24, 28],
-                         [11, 12, 14, 16, 19, 23, 26, 43],
-                         [12, 14, 16, 18, 22, 22, 21, 62],
-                         [14, 16, 18, 21, 23, 21, 42, 77],
-                         [16, 19, 22, 25, 21, 38, 76, 86],
-                         [20, 23, 25, 37, 38, 77, 82, 95],
-                         [24, 28, 46, 62, 75, 88, 98, 101]])
-
-def compress_channel_dct(pixels, tile_size=8):
+def compress_channel_dct(pixels, dct_quant, tile_size=8):
     img_h,img_w = pixels.shape
 
-    buf = struct.pack("H", tile_size)
-
+    buf = bytearray(struct.pack("H", tile_size))
+    quant_data = dct_quant.astype(numpy.int32).tobytes()
+    buf += struct.pack("H", len(quant_data))
+    buf += quant_data
+    
     for j in range(math.ceil(img_h/tile_size)):
         for i in range(math.ceil(img_w/tile_size)):
             tile = numpy.zeros((tile_size, tile_size))
+            
             tmp = pixels[j*tile_size:(j+1)*tile_size, i*tile_size:(i+1)*tile_size]
             tile[0:tmp.shape[0],0:tmp.shape[1]] = tmp
 
-            ## mirror pixels in order to make the tiles square
-            ##h_d = tile.shape[0]-tmp.shape[0]
-            ##w_d = tile.shape[1]-tmp.shape[1]
-
-            ##tile[tmp.shape[0]:] = tile[tmp.shape[0]-h_d-1:tile.shape[0]-h_d-1][::-1]
-            ##tile[:,tmp.shape[1]:] = tile[:,tmp.shape[1]-w_d-1:tile.shape[1]-w_d-1][::-1]
-            
-            tile = dct(dct(tile.T, norm = 'ortho').T, norm = 'ortho')
+            tile = dct(dct(tile.T, norm='ortho').T, norm='ortho')
             tile = numpy.divide(tile, dct_quant)
             tile = numpy.add(numpy.around(tile, 0), 0.0)
             tile = tile.astype(numpy.int8)
-
-            print(tile)
             
-            ##tile = numpy.concatenate([numpy.diagonal(tile[::-1,:], k)[::(2*(k % 2)-1)] for k in range(1-tile.shape[0], tile.shape[1])])
-    
             compressed = zlib.compress(tile.tobytes())
             buf += struct.pack("H", len(compressed)) 
             buf += compressed
-    
+            
     return buf
 
 def decompress_channel_dct(buf, img_w, img_h):
-    offset = 0
-    tile_size, = struct.unpack("H", buf[offset:offset+2])
+    tile_size, = struct.unpack("H", buf[0:2])
+    offset = 2
+    
+    quant_len, = struct.unpack("H", buf[offset:offset+2])
     offset += 2
+    dct_quant = numpy.frombuffer(buf[offset:offset+quant_len], dtype=numpy.int32).reshape(tile_size, tile_size)
+    offset += quant_len
 
     output_pixels = numpy.zeros((img_h + tile_size, img_w + tile_size))
 
-    print(img_w, img_h)
     i = 0
     j = 0
     while offset < len(buf):
@@ -84,7 +71,7 @@ def decompress_channel_dct(buf, img_w, img_h):
         offset += length
 
         pixels = numpy.multiply(pixels, dct_quant)
-        pixels = idct(idct(pixels.T, norm = 'ortho').T, norm = 'ortho')
+        pixels = idct(idct(pixels.T, norm='ortho').T, norm='ortho')
 
         output_pixels[j:j+tile_size, i:i+tile_size] = pixels
         
@@ -96,14 +83,26 @@ def decompress_channel_dct(buf, img_w, img_h):
     return output_pixels[0:img_h, 0:img_w]
 
 ## vertical=0.25, horizontal=0.5
-def subsample(pixels, horizontal=0.5, vertical=0.25):
+def subsample(pixels, horizontal, vertical):
     output = scipy.ndimage.zoom(pixels, (vertical, horizontal))
 
     return output
+
+dct_quant = numpy.array([[8,  9,  11, 12, 14, 16, 21, 25],
+                         [9,  11, 12, 14, 16, 20, 24, 28],
+                         [11, 12, 14, 16, 19, 23, 26, 43],
+                         [12, 14, 16, 18, 22, 22, 21, 62],
+                         [14, 16, 18, 21, 23, 21, 42, 77],
+                         [16, 19, 22, 25, 21, 38, 76, 86],
+                         [20, 23, 25, 37, 38, 77, 82, 95],
+                         [24, 28, 46, 62, 75, 88, 98, 101]])
     
 class ImageCompression:
-    def __init__(self, pil_image):
+    def __init__(self, pil_image, subsample=(0.25, 0.5), dct_tile=8, dct_quant=dct_quant):
         self._image = pil_image.convert("RGB")
+        self._subsample = subsample
+        self._dct_tile = dct_tile
+        self._dct_quant = dct_quant
 
     def get_image(self):
         return self._image
@@ -124,22 +123,17 @@ class ImageCompression:
 
         y,u,v = numpy.dsplit(yuv, 3)
         y = y.reshape(y.shape[0], y.shape[1])
-        u = subsample(u[:,:,0])
-        v = subsample(v[:,:,0])
+        u = subsample(u[:,:,0], *self._subsample)
+        v = subsample(v[:,:,0], *self._subsample)
 
         for i,channel in enumerate((y,u,v)):
-            print(channel.min(), channel.max())
             if i == 0: ## y channel range: -128 127
                 channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 128), -128, 127)).astype(numpy.int8)
             else: ## u v channel range: -128 127
                 channel_data = numpy.rint(numpy.clip(numpy.multiply(channel, 256), -128, 127)).astype(numpy.int8)
                 
-            print(channel_data.min(), channel_data.max())
-
-            ##print(len(compress_channel_dct(channel_data)))
             chan_h,chan_w = channel.shape
-            compressed_data = compress_channel_dct(channel_data)
-            ##compressed_data = zlib.compress(channel_data)
+            compressed_data = compress_channel_dct(channel_data, self._dct_quant)
             length = len(compressed_data)
 
             buffer += struct.pack("III", chan_w, chan_h, length)
@@ -149,20 +143,20 @@ class ImageCompression:
 
     def decompress(self, buffer):
         print("Decompressing image...")
-        img_w,img_h = struct.unpack("II", buffer[0:8])
-        del buffer[0:8]
+        offset = 0
+        img_w,img_h = struct.unpack("II", buffer[offset:offset+8])
+        offset += 8
 
         channels = []
         
         for i in range(3):
-            w,h,length = struct.unpack("III", buffer[0:12])
-            del buffer[0:12]
+            w,h,length = struct.unpack("III", buffer[offset:offset+12])
+            offset += 12
 
-            data = buffer[0:length]
-            del buffer[0:length]
+            data = buffer[offset:offset+length]
+            offset += length
 
             channel = decompress_channel_dct(data, w, h)
-            ##channel = numpy.frombuffer(zlib.decompress(data), numpy.uint8).astype(numpy.single).reshape(w,h)
             if i == 0:
                 channel = numpy.divide(channel, 128)
             else:
@@ -181,85 +175,8 @@ class ImageCompression:
 
         return self._image, (y,u,v)
 
-## Converts all images in given folder into given output folder and returns stats
-def test_convert_folder(input_folder, output_folder, debug_yuv=True):
-    if not os.path.exists(output_folder):
-        os.mkdir(output_folder)
-
-    for fn in os.listdir(output_folder):
-        f = os.path.join(output_folder, fn)
-        if os.path.isfile(f):
-            os.remove(f)
-
-    test_stats = []
-    for file in os.listdir(input_folder):
-        print("Converting {0}:".format(file))
-        img_name = os.path.splitext(file)[0]
-        
-        pil_img = Image.open(os.path.join(input_folder, file)).convert("RGB")
-        img = ImageCompression(pil_img)
-
-        compressed, debug_channels = img.compress()
-
-        f = open(os.path.join("test-output-bin", img_name+".buf"), "wb")
-        f.write(compressed)
-        f.close()
-
-        compressed_len = len(compressed)
-        result_img, debug_channels = img.decompress(compressed)
-
-        output_channels = True
-        if output_channels:
-            print("Exporting YUV")
-            for i, debug_channel in enumerate(debug_channels):
-                channel_data = numpy.empty((*debug_channel.shape, 3), dtype=numpy.single)
-                channel_data[:,:,0] = numpy.full(debug_channel.shape, 0.5, dtype=numpy.single)
-                channel_data[:,:,i] = debug_channel
-                channel_pixels = ycocg_rgb(channel_data)
-                channel_img = Image.fromarray(channel_pixels, mode="RGB")
-                channel_img.save(os.path.join(output_folder, "{0}-chan-{1}.png".format(img_name, i)))
-
-        print("Comparing against PNG/JPEG")
-        ## compare against PNG
-        b = BytesIO()
-        pil_img.save(b, format="png")
-        png_len = b.getbuffer().nbytes
-        # JPEG
-        b = BytesIO()
-        pil_img.save(b, format="jpeg")
-        jpeg_len = b.getbuffer().nbytes
-
-        raw_size_mb = (pil_img.size[0]*pil_img.size[1]*3)/10**6
-        compressed_size_mb = compressed_len/10**6
-        png_size_mb = png_len/10**6
-        jpeg_size_mb = jpeg_len/10**6
-
-        test_stats.append([img_name, *pil_img.size, raw_size_mb, compressed_size_mb, compressed_size_mb/raw_size_mb, png_size_mb, compressed_size_mb/png_size_mb, jpeg_size_mb, compressed_size_mb/jpeg_size_mb])
-
-        print("-> {0} compressed={1:.2f}MB png={2:.2f}MB ratio={3:.2f}% jpg={4:.2f}MB ratio={5:.2f}%".format(file,
-                                                                                                             compressed_size_mb,
-                                                                                                             png_size_mb,
-                                                                                                             (compressed_size_mb/png_size_mb)*100,
-                                                                                                             jpeg_size_mb,
-                                                                                                             (compressed_size_mb/jpeg_size_mb)*100))
-        ## save converted color image and also the original for comparison
-        result_img.save(os.path.join(output_folder, img_name+"-color.png"))
-        pil_img.save(os.path.join(output_folder, img_name+"-!orig.png"))
-
-    return test_stats
-    
 def test():
-    input_folder = "test-images"
-    output_folder = "test-output"
-
-    test_stats = test_convert_folder(input_folder, output_folder)
-
-    csv = ""
-    for r in test_stats:
-        for i in r:
-            csv += (i if type(i) == str else str(i).replace(".", ",")) + ";"
-        csv += "\n"
-    print(csv)
+    pass
     
 ## should output a single color red image
 def ycocg_test():
