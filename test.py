@@ -4,6 +4,7 @@ from urllib import request
 import numpy
 import random
 import os
+import time
 import json
 
 def format_size(num, suffix="B"):
@@ -45,7 +46,9 @@ def test_image(pil_img, subsample):
     return compressed_len, output_image, debug_channels
 
 def test_convert_image(pil_img, subsample, output_folder, img_name, debug_yuv=True):
+    start = time.time()
     compressed_size, output_image, debug_channels = test_image(pil_img, subsample)
+    duration = time.time()-start
 
     output_image.save(os.path.join(output_folder, "{0}-color.png".format(img_name)))
 
@@ -53,7 +56,7 @@ def test_convert_image(pil_img, subsample, output_folder, img_name, debug_yuv=Tr
         yuv_image = get_debug_channel_composite(debug_channels)
         yuv_image.save(os.path.join(output_folder, "{0}-debug.png".format(img_name)))
         
-    print(img_name, format_size(compressed_size))
+    print("=>{0} took {1:.2f}s size={2}".format(img_name, duration, format_size(compressed_size)))
     
 
 def test_images_convert_folder(input_folder, output_folder, subsample=(0.5, 0.25), debug_yuv=True):
@@ -99,6 +102,7 @@ def test_random_images(input_folder, output_folder, num, subsample=(0.5, 0.25), 
                 os.remove(f)
 
     for i in range(num):
+        print("Converting {0}:".format(i))
         img_name = "{0:04d}".format(i)
         img_path = os.path.join(input_folder, img_name+".jpg")
         download_random_image(img_path)
