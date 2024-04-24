@@ -112,5 +112,6 @@ def test_random_images(input_folder, output_folder, num, subsample=(0.5, 0.25), 
         test_convert_image(pil_img, subsample, output_folder, img_name, debug_yuv)
 
 if __name__ == "__main__":
-    test_random_images("test-random-images", "test-random-images-output", 50)
-    ##test_images_convert_folder("test-images", "test-images-output")
+    ##test_random_images("test-random-images", "test-random-images-output", 50)
+    test_images_convert_folder("test-images", "test-images-output")
+    ##test_convert_image(Image.open("test-images/color-bars-01.png"), (0.5, 0.25), "test-images-output",  "color-bars-01", debug_yuv=False)

@@ -1,9 +1,10 @@
-import os
 import math
 import numpy
 import struct
 import scipy
 import zlib
+import time
+import cv2
 from PIL import Image
 from scipy.fftpack import dct, idct
 from io import BytesIO
@@ -14,18 +15,54 @@ def rgb_ycocg(pixels):
          [1/2, 0, 1/2],
          [1/4, -1/2, -1/4]]
 
-    return numpy.dot(numpy.divide(pixels, 255), m)
+    return numpy.dot(pixels/255, m)
 
 def ycocg_rgb(pixels):
     m = [[1, 1, 1],
          [1, 0, -1],
          [-1, 1, -1]]
 
-    pixels = numpy.multiply(numpy.dot(pixels, m), 255)
+    pixels = numpy.dot(pixels, m)*255
     pixels = numpy.clip(pixels, 0, 255)
     return numpy.rint(pixels).astype(numpy.uint8)
 
+def rle_tile(array):
+    t = array[0]
+    c = 0
+
+    out = []
+    for i in range(len(array)):
+        if array[i] != t:
+            out.extend([c, t])
+            t = array[i]
+            c = 0
+
+        c += 1
+
+    out.extend([c, t])
+
+    return numpy.asarray(out)
+
+def unrle_tile(array):
+    if len(array) %2 != 0:
+        raise Exception("Not RLE!")
+
+    out = []
+    for i in range(math.floor(len(array)/2)):
+        idx = i*2
+        cnt = array[idx]
+        val = array[idx+1]
+
+        out.extend([val]*cnt)
+
+    return numpy.asarray(out)
+
+def zigzag_tile(tile):
+    return numpy.concatenate([numpy.diagonal(tile[::-1,:], k)[::(2*(k % 2)-1)] for k in range(1-tile.shape[0], tile.shape[0])])
+
 def compress_channel_dct(pixels, dct_quant, tile_size=8):
+    t = time.time()
+      
     img_h,img_w = pixels.shape
 
     buf = bytearray(struct.pack("H", tile_size))
@@ -41,17 +78,23 @@ def compress_channel_dct(pixels, dct_quant, tile_size=8):
             tile[0:tmp.shape[0],0:tmp.shape[1]] = tmp
 
             tile = dct(dct(tile.T, norm='ortho').T, norm='ortho')
-            tile = numpy.divide(tile, dct_quant)
-            tile = numpy.add(numpy.around(tile, 0), 0.0)
-            tile = tile.astype(numpy.int8)
+            tile /= dct_quant
+            tile = numpy.around(tile, 0) + 0.0
+
+            tile = zigzag_tile(tile)
+            tile = rle_tile(tile.flatten())
             
-            compressed = zlib.compress(tile.tobytes())
+            compressed = zlib.compress(tile.astype(numpy.int8).tobytes())
             buf += struct.pack("H", len(compressed)) 
             buf += compressed
+            
+    print("dct compress took: {0:.2f}s".format(time.time()-t))
             
     return buf
 
 def decompress_channel_dct(buf, img_w, img_h):
+    t = time.time()
+    
     tile_size, = struct.unpack("H", buf[0:2])
     offset = 2
     
@@ -67,10 +110,14 @@ def decompress_channel_dct(buf, img_w, img_h):
     while offset < len(buf):
         length, = struct.unpack("H", buf[offset:offset+2])
         offset += 2
-        pixels = numpy.frombuffer(zlib.decompress(buf[offset:offset+length]), numpy.int8).reshape(tile_size, tile_size)
+        rle = numpy.frombuffer(zlib.decompress(buf[offset:offset+length]), numpy.int8)
         offset += length
 
-        pixels = numpy.multiply(pixels, dct_quant)
+        pixels = unrle_tile(rle).astype(numpy.int32).reshape(tile_size, tile_size)
+        ## todo: unzigzag!
+        ##pixels = zigzag_tile(pixels).reshape(tile_size, tile_size)
+
+        pixels *= dct_quant
         pixels = idct(idct(pixels.T, norm='ortho').T, norm='ortho')
 
         output_pixels[j:j+tile_size, i:i+tile_size] = pixels
@@ -79,13 +126,22 @@ def decompress_channel_dct(buf, img_w, img_h):
         if i >= img_w:
             i = 0
             j += tile_size
+
+    print("dct decompress took: {0:.2f}s".format(time.time()-t))
             
     return output_pixels[0:img_h, 0:img_w]
 
 ## vertical=0.25, horizontal=0.5
 def subsample(pixels, horizontal, vertical):
-    output = scipy.ndimage.zoom(pixels, (vertical, horizontal))
+    t = time.time()
+    nw = pixels.shape[0]*vertical
+    nh = pixels.shape[1]*horizontal
+    
+    output = cv2.resize(pixels, (math.floor(nh), math.floor(nw)), interpolation=cv2.INTER_AREA) 
+    ##output = scipy.ndimage.zoom(pixels, (vertical, horizontal))
 
+    print("subsample took: {0:.2f}s".format(time.time()-t))
+    
     return output
 
 dct_quant = numpy.array([[8,  9,  11, 12, 14, 16, 21, 25],
@@ -112,6 +168,7 @@ class ImageCompression:
 
     def compress(self):
         print("Compressing image...")
+        t = time.time()
         buffer = bytearray()
         img_w,img_h = self._image.size
     
@@ -139,6 +196,7 @@ class ImageCompression:
             buffer += struct.pack("III", chan_w, chan_h, length)
             buffer += compressed_data
 
+        print("compressing took: {0:.2f}s".format(time.time()-t))
         return buffer, (y, u, v)
 
     def decompress(self, buffer):
@@ -175,12 +233,7 @@ class ImageCompression:
 
         return self._image, (y,u,v)
 
-def test():
-    pass
-    
-## should output a single color red image
 def ycocg_test():
-    import os
     w,h = 256, 256
     channel_data = numpy.full((w, h, 3), 0, dtype=numpy.single)
     channel_data[:,:,0] = numpy.full((w, h), 1/4, dtype=numpy.single)
@@ -191,5 +244,4 @@ def ycocg_test():
     channel_img.save("ycocg-test.png")
           
 if __name__ == "__main__": 
-    test()
     ycocg_test()
