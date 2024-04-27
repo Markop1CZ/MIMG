@@ -1,176 +1,235 @@
+import math
 import numpy
 import struct
-import math
 import os
 import zlib
-from io import BytesIO
+import cv2
 from PIL import Image
+from scipy.fftpack import dct, idct
+from io import BytesIO
 
-FLAGS_RLE = 1 << 0
-FLAGS_ZLIB = 1 << 1
-FLAGS_RGB = 1 << 2
-FLAGS_YUV = 1 << 3
+FILE_SIG = b"MIMG"
+FILE_SIG_L = 4
 
-FILE_SIG = b"IMG"
-FILE_SIG_L = 3
+DCT_QUANT_DEFAULT = \
+    numpy.array([[16,  11,  10,  16,  24,  40,  51,  61],
+                 [12,  12,  14,  19,  26,  58,  60,  55],
+                 [14,  13,  16,  24,  40,  57,  69,  56],
+                 [14,  17,  22,  29,  51,  87,  80,  62],
+                 [18,  22,  37,  56,  68, 109, 103,  77],
+                 [24,  35,  55,  64,  81, 104, 113,  92],
+                 [49,  64,  78,  87, 103, 121, 120, 101],
+                 [72,  92,  95,  98, 112, 100, 103,  99]])
 
-def RGB_YUV(imgdata):
-    m = numpy.array([[0.29900, -0.16874,  0.50000],
-                     [0.58700, -0.33126, -0.41869],
-                     [0.11400, 0.50000, -0.08131]])
+DCT_QUANT_LOW = \
+    numpy.array([[2,  9,  11, 12, 14, 16, 21, 25],
+                 [9,  11, 12, 14, 16, 20, 24, 28],
+                 [11, 12, 14, 16, 19, 23, 26, 43],
+                 [12, 14, 16, 18, 22, 22, 21, 62],
+                 [14, 16, 18, 21, 23, 21, 42, 77],
+                 [16, 19, 22, 25, 21, 38, 76, 86],
+                 [20, 23, 25, 37, 38, 77, 82, 95],
+                 [24, 28, 46, 62, 75, 88, 98, 101]])
+
+def RGB_YCOCG(pixels):
+    m = [[1/4, 1/2, -1/4],
+         [1/2, 0, 1/2],
+         [1/4, -1/2, -1/4]]
      
-    yuv = numpy.dot(imgdata, m)
-    yuv[:, :, 1:] += 128
-    
-    return yuv.astype(numpy.uint8)
+    return numpy.dot(pixels/255, numpy.asarray(m))
 
-def YUV_RGB(imgdata):
-    m = numpy.array([[1.0, 1.0, 1.0],
-                     [-0.000007154783816076815, -0.3441331386566162, 1.7720025777816772],
-                     [ 1.4019975662231445, -0.7141380310058594, 0.00001542569043522235]])
-    
-    rgb = numpy.dot(imgdata, m)
-    
-    rgb[:, :, 0] -= 179.45477266423404
-    rgb[: ,:, 1] += 135.45870971679688
-    rgb[:, :, 2] -= 226.8183044444304
-    
-    return rgb.astype(numpy.uint8)
+def YCOCG_RGB(pixels):
+    m = [[1, 1, 1],
+         [1, 0, -1],
+         [-1, 1, -1]]
 
-class MImg:
-    def __init__(self, flags, w, h, pil_img, chroma_scale=0.5):
-        self.flags = flags
-        self.w = w
-        self.h = h
-        self.pil_img = pil_img
+    rgb = numpy.dot(pixels, numpy.asarray(m))*255
+    rgb = numpy.clip(rgb, 0, 255)
+    return numpy.rint(rgb).astype(numpy.uint8)
+
+def resize_channel(pixels, w, h):
+    return cv2.resize(pixels, (h, w), interpolation=cv2.INTER_AREA) 
+
+class DCTCompression:
+    def __init__(self, tile_size=8, dct_quant=None):
+        self.dct_quant = dct_quant if not dct_quant is None else DCT_QUANT_DEFAULT
+        self.tile_size = 8
+
+    def compress_channels(self, f, channels):
+        quant_data = self.dct_quant.astype(numpy.int32).tobytes()
+        tile_size = self.tile_size
+
+        f.write(struct.pack("HHI", self.tile_size, len(quant_data), len(channels)))
+        f.write(quant_data)
+
+        for channel in channels:
+            chan_w, chan_h = channel.shape
+            f.write(struct.pack("II", chan_w, chan_h))
+
+            num_tiles_pos = f.tell()
+            f.write(struct.pack("I", 0))
+
+            k = 0
+            for j in range(math.ceil(chan_h/tile_size)):
+                for i in range(math.ceil(chan_w/tile_size)):
+                    tile = numpy.zeros((tile_size, tile_size))
+
+                    pixels = channel[i*tile_size : (i+1)*tile_size, j*tile_size : (j+1)*tile_size]
+                    tile[0:pixels.shape[0], 0:pixels.shape[1]] = pixels
+
+                    tile = dct(dct(tile.T, norm='ortho').T, norm='ortho')
+                    tile /= self.dct_quant
+                    tile = numpy.around(tile, 0)
+
+                    compressed_tile = zlib.compress(tile.astype(numpy.int8).tobytes())
+                    f.write(struct.pack("H", len(compressed_tile)))
+                    f.write(compressed_tile)
+
+                    k += 1
+
+            f.seek(num_tiles_pos, 0)
+            f.write(struct.pack("I", k))
+            f.seek(0, 2)
+
+    @staticmethod
+    def decompress_channels(f):
+        tile_size, quant_data_len, num_channels = struct.unpack("HHI", f.read(8))
+        quant_data = f.read(quant_data_len)
+        dct_quant = numpy.frombuffer(quant_data, dtype=numpy.int32).reshape(tile_size, tile_size)
+
+        output_channels = []
+        for c in range(num_channels):
+            chan_w, chan_h, num_tiles = struct.unpack("III", f.read(12))
+            print(c, chan_w, chan_h, num_tiles)
+
+            output_channel = numpy.zeros((chan_w + tile_size, chan_h + tile_size))
+
+            i = 0
+            j = 0
+            for t in range(num_tiles):
+                tile_length, = struct.unpack("H", f.read(2))
+
+                compressed_tile = f.read(tile_length)
+                tile = numpy.frombuffer(zlib.decompress(compressed_tile), numpy.int8).reshape(tile_size, tile_size)
+                
+                tile = tile*dct_quant
+                tile = idct(idct(tile.T, norm='ortho').T, norm='ortho')
+
+                output_channel[i:i+tile_size, j:j+tile_size] = tile
+
+                i += tile_size
+                if i >= chan_w:
+                    i = 0
+                    j += tile_size
+
+            output_channels.append(output_channel[0:chan_w, 0:chan_h])
+
+        return output_channels
+
+class ImageCompression:
+    def __init__(self, chroma_scale, dct_quant):
         self.chroma_scale = chroma_scale
+        self.dct = DCTCompression(dct_quant)
 
     @staticmethod
-    def from_pil(pil_img, flags=FLAGS_ZLIB | FLAGS_YUV):
-        return MImg(flags, pil_img.width, pil_img.height, pil_img)
+    def decompress(f):
+        f.seek(0)
 
-    @staticmethod
-    def from_bytes(b):
-        return MImg.from_file(BytesIO(b))
-
-    @staticmethod
-    def from_file(f):    
-        sig = f.read(FILE_SIG_L)
-        if sig != FILE_SIG:
+        if f.read(FILE_SIG_L) != FILE_SIG:
             raise Exception("Signature mismatch!")
 
-        flags = f.read(1)[0]
-        w,h,chroma_w,chroma_h = struct.unpack("IIII", f.read(16))
+        img_w, img_h = struct.unpack("II", f.read(8))
 
-        print(chroma_w, chroma_h)
+        channels = DCTCompression.decompress_channels(f)
+        for i, channel in enumerate(channels):
+            channel /= (128 if i == 0 else 256)
 
-        pixel_data = []
-        for i in range(3):
-            l = struct.unpack("I", f.read(4))[0]
-            data = f.read(l)
-            
-            if flags & FLAGS_ZLIB:
-                data = zlib.decompress(data)
-                
-            print(len(data))
-            pixel_data.append(data)
+        y,u,v = channels
+        u = resize_channel(u, img_h, img_w)
+        v = resize_channel(v, img_h, img_w)
 
-        imgdata = numpy.ndarray((h, w, 3), dtype=numpy.uint8)
-        pil_image = None
-        if flags & FLAGS_YUV:
-            print("yuv mode (reading)")
-            y1 = numpy.frombuffer(pixel_data[0], dtype=numpy.uint8)
-            y1 = numpy.reshape(y1, (h, w))
+        print(y.shape, u.shape, v.shape)
 
-            imgdata[:, :, 0] = y1
-            
-            for i in range(1, 3):
-                chroma = numpy.frombuffer(pixel_data[i], dtype=numpy.uint8)
-                chroma = numpy.reshape(chroma, (chroma_h, chroma_w))
-                chroma = Image.frombytes("L", (chroma_w, chroma_h), chroma)
-                chroma = chroma.resize((w, h))
-                chroma = numpy.array(chroma)
+        yuv = numpy.dstack((y, u, v))
+        print(yuv.shape)
+        pixels = YCOCG_RGB(yuv).astype(numpy.uint8)
 
-                imgdata[:, :, i] = chroma
+        return Image.fromarray(pixels)
+        
+    def compress(self, f, pil_image):
+        img_w, img_h = pil_image.size
 
-            imgdata = YUV_RGB(imgdata)
-            pil_image = Image.frombytes("RGB", (w, h), imgdata)            
-        else:
-            print("rgb mode (reading)")
-            for i in range(0, 3):
-                imgdata[:, :, i] = numpy.reshape(numpy.frombuffer(pixel_data[i], dtype=numpy.uint8), (h, w))
-            print(imgdata)
-            pil_image = Image.frombytes("RGB", (w, h), imgdata)
+        f.write(FILE_SIG + struct.pack("II", img_w, img_h))
 
-        return MImg(flags, w, h, pil_image)
+        yuv = RGB_YCOCG(numpy.array(pil_image))
 
-    def to_bytes(self):
-        b = b""
-        b += FILE_SIG
-        b += bytes([self.flags])
+        chroma_size = (math.floor(img_w*self.chroma_scale[0]), math.floor(img_h*self.chroma_scale[1]))
 
-        b += struct.pack("II", self.w, self.h)
+        y,u,v = numpy.dsplit(yuv, 3)
+        y = y.reshape(img_h, img_w)
+        u = resize_channel(u[:,:,0], *chroma_size)
+        v = resize_channel(v[:,:,0], *chroma_size)
 
-        chroma_w = math.floor(self.w*self.chroma_scale)
-        chroma_h = math.floor(self.h*self.chroma_scale)
+        channels = [y, u, v]
 
-        b += struct.pack("II", chroma_w, chroma_h)
-    
-        imgdata = numpy.array(self.pil_img)
-        pixel_data = []
-        if self.flags & FLAGS_YUV:
-            print("yuv model")
-            imgdata = RGB_YUV(imgdata)
+        for i, channel in enumerate(channels):
+            channel *= (128 if i == 0 else 256)
+            channel = numpy.floor(numpy.clip(channel, -128, 127))
 
-            pixel_data.append(imgdata[:, :, 0].tobytes())
-            ## chroma subsample
-            for i in range(1, 3):
-                chroma = Image.fromarray(numpy.reshape(imgdata[:, :, i], (self.h, self.w)) , 'L')
-                chroma = chroma.resize((chroma_w, chroma_h))
-                chroma.save("test_chroma_{0}.jpg".format(i))
-                chroma = numpy.array(chroma).astype("uint8")
+            channels[i] = channel
 
-                pixel_data.append(chroma.tobytes())
-        else:
-            print("rgb model")
-            print(imgdata)
-            for i in range(0, 3):
-                pixel_data.append(imgdata[:, :, i].tobytes())
+        self.dct.compress_channels(f, channels)
 
-        ## ZLIB COMPRESS
-        if self.flags & FLAGS_ZLIB:
-            for i,data in enumerate(pixel_data):
-                pixel_data[i] = zlib.compress(data)
+class MImg:
+    def __init__(self, pil_img, chroma_scale=(0.5, 0.5), dct_quant=None):
+        self._image = pil_img
+        self.compression = ImageCompression(chroma_scale, dct_quant)
 
-        ## PIXEL DATA
-        for data in pixel_data:
-            b += struct.pack("I", len(data))
-            b += data
+    @staticmethod
+    def from_image(filename):
+        pil_img = Image.open(filename).convert("RGB")
+        return MImg(pil_img)
 
-        return b
+    @staticmethod
+    def from_buffer(buf):
+        return MImg.load(BytesIO(buf))
 
-    def to_file(self, fn):
-        f = open(fn, "wb")
-        f.write(self.to_bytes())
+    @staticmethod
+    def from_file(filename):
+        return MImg.load(open(filename, "rb"))
+
+    @staticmethod
+    def load(f): 
+        pil_image = ImageCompression.decompress(f)
         f.close()
 
-    def save_pil(self, name):
-        self.pil_img.save(name)
+        return MImg(pil_image)
 
-def convert_test_images():
-    test_dir = "test"
-    chroma_scale = 1.0
-    files = os.listdir(test_dir)
+    def save(self, f):
+        self.compression.compress(f, self._image)
+        f.close()
+
+    def to_file(self, filename):
+        self.save(open(filename, "wb"))
+
+def test_compress_images():
+    input_dir = "test-images"
+    output_dir = "test-images-output"
+
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
     
-    for f in files:
-        if not "_converted" in f and not ".buf" in f:
-            print(f)
-            r = MImg.from_pil(Image.open(os.path.join(test_dir, f)))
-            r.chroma_scale = chroma_scale
-            out_fn = os.path.join(test_dir, os.path.splitext(f)[0] + ".buf")
-            r.to_file(out_fn)
-            b = MImg.from_file(open(out_fn, "rb"))
-            b.save_pil(os.path.join(test_dir, os.path.splitext(f)[0] + "_converted.jpg"))
+    for file in os.listdir(input_dir):
+        print(file)
+        name,ext = os.path.splitext(file)
 
-convert_test_images()
+        output_filename = os.path.join(output_dir, name+".buf")
 
+        img = MImg.from_image(os.path.join(input_dir, file))
+        img.to_file(output_filename)
+
+        img2 = MImg.from_file(output_filename)
+        img2._image.save(os.path.join(output_dir, file))
+
+if __name__ == "__main__":
+    test_compress_images()
