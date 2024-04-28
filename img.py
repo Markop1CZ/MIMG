@@ -136,7 +136,7 @@ class DCTCompression:
         for c in range(num_channels):
             chan_w, chan_h, num_tiles, compressed_channel_length = struct.unpack("IIII", f.read(16))
 
-            output_channel = numpy.zeros((chan_w + tile_size, chan_h + tile_size))
+            output_channel = numpy.zeros((chan_w + tile_size, chan_h + tile_size), dtype=numpy.single)
 
             channel = BytesIO(zlib.decompress(f.read(compressed_channel_length)))
 
@@ -257,6 +257,8 @@ def test_compress_images():
     input_dir = "test-images"
     output_dir = "test-images-output"
 
+    stats = []
+
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
@@ -268,22 +270,42 @@ def test_compress_images():
         output_filename = os.path.join(output_dir, name+".buf")
 
         png_size = os.stat(os.path.join(input_dir, file)).st_size
+        pil_img = Image.open(os.path.join(input_dir, file)).convert("RGB")
+
+        b = BytesIO()
+        pil_img.save(b, format="jpeg")
+        jpeg_size = b.getbuffer().nbytes
 
         try:
             t = time.time()
-            img = MImg.from_image(os.path.join(input_dir, file))
+            img = MImg(pil_img)
             img.to_file(output_filename)
             compressed_size = os.stat(output_filename).st_size
             t1 = time.time()
+        except Exception as e:
+            print("error compressing {0}: {1}".format(file, e))
+            traceback.print_exc()
+            continue
 
+        try:
             img2 = MImg.from_file(output_filename)
             img2._image.save(os.path.join(output_dir, file))
             t2 = time.time()
-
-            print("file={0} compression={1:.1f}s decompression={2:.1f}s png={3} compressed={4} ratio={5:.2%}".format(file, t1-t, t2-t1, format_size(png_size), format_size(compressed_size), 1-(compressed_size/png_size)))
         except Exception as e:
-            print("error compressing {0}: {1}".format(file, e))
+            print("error decompressing {0}: {1}".format(file, e))
+            traceback.print_exc()
+            continue
+        
+        stats.append([name, *pil_img.size, (pil_img.size[0]*pil_img.size[1]*3)/1048576, png_size/1048576, jpeg_size/1048576, compressed_size/1048576])
+        print("file={0} compression={1:.1f}s decompression={2:.1f}s png={3} compressed={4} ratio={5:.2%}".format(file, t1-t, t2-t1, format_size(png_size), format_size(compressed_size), 1-(compressed_size/png_size)))
+    
+    f = open("{0}.csv".format(time.time()), "w")
+    for s in stats:
+        f.write(";".join([str(x).replace(",", ".") for x in s]))
+        f.write("\n")
+    f.close()
 
 if __name__ == "__main__":
     import time
+    import traceback
     test_compress_images()
