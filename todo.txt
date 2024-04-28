@@ -1,0 +1,12 @@
+TODO:
+Completely rewrite whole compressor.
+
+- NumPy representation of image: h, w
+- Respect this when iterating over image
+- All functions' size arguments: a tuple (w, h)
+- Reading and writing with file objects (.read() .write())
+- Macroblock size: 8 (but can experiment)
+- Use YCoCg-R, a reversible variation
+- Before doing DCT, have values in range of -128 to 127 -> signed int8
+- Work out a quantization matrix
+- Zigzag before zlib
