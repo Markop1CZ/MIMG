@@ -5,3 +5,4 @@ test-random-images-output
 ycocg-test.png
 dct-test-out.png
 __pycache__
+*.csv

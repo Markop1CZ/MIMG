@@ -253,55 +253,87 @@ def format_size(num, suffix="B"):
         num /= 1024.0
     return f"{num:.1f}Yi{suffix}"
 
+def test_compress_image(input_filepath, output_dir):
+    kb = 1024
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
+    stats = {}
+
+    input_filename = os.path.basename(input_filepath)
+    name,ext = os.path.splitext(input_filename)
+
+    output_filename = "{0}.buf".format(name)
+    output_filepath = os.path.join(output_dir, output_filename)
+    pil_img = Image.open(input_filepath).convert("RGB")
+
+    jpeg_buf = BytesIO()
+    pil_img.save(jpeg_buf, format="jpeg", quality=35)
+    jpeg_size = jpeg_buf.getbuffer().nbytes
+
+    png_buf = BytesIO()
+    pil_img.save(png_buf, format="png")
+    png_size = png_buf.getbuffer().nbytes
+
+    del jpeg_buf
+    del png_buf
+
+    t0 = time.time()
+    try:
+        img = MImg(pil_img)
+        img.to_file(output_filepath)
+        mimg_size = os.stat(output_filepath).st_size
+    except Exception as e:
+        print("Error compressing {0}:".format(input_filename))
+        traceback.print_exc()
+        return 
+    t1 = time.time()
+
+    try:
+        img2 = MImg.from_file(output_filepath)
+        img2._image.save(os.path.join(output_dir, "{0}.png".format(name)))
+    except Exception as e:
+        print("Error decompressing {0}:".format(output_filename))
+        traceback.print_exc()
+        return
+    t2 = time.time()
+
+    stats["name"] = name
+    stats["width"], stats["height"] = pil_img.size
+    stats["size_raw"] = (3 * pil_img.size[0] * pil_img.size[1]) / kb
+    stats["size_mimg"] = mimg_size / kb
+    stats["size_png"] = png_size / kb
+    stats["size_jpeg"] = jpeg_size / kb
+    stats["time_com"] = t1 - t0
+    stats["time_dec"] = t2 - t1
+
+    return stats
+
 def test_compress_images():
     input_dir = "test-images"
     output_dir = "test-images-output"
 
     stats = []
 
-    if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
-
-    print("testing compression in {0}".format(input_dir))
+    print("Testing compression in {0}".format(input_dir))
     
     for file in os.listdir(input_dir):
-        name,ext = os.path.splitext(file)
-
-        output_filename = os.path.join(output_dir, name+".buf")
-
-        png_size = os.stat(os.path.join(input_dir, file)).st_size
-        pil_img = Image.open(os.path.join(input_dir, file)).convert("RGB")
-
-        b = BytesIO()
-        pil_img.save(b, format="jpeg")
-        jpeg_size = b.getbuffer().nbytes
-
-        try:
-            t = time.time()
-            img = MImg(pil_img)
-            img.to_file(output_filename)
-            compressed_size = os.stat(output_filename).st_size
-            t1 = time.time()
-        except Exception as e:
-            print("error compressing {0}: {1}".format(file, e))
-            traceback.print_exc()
-            continue
-
-        try:
-            img2 = MImg.from_file(output_filename)
-            img2._image.save(os.path.join(output_dir, file))
-            t2 = time.time()
-        except Exception as e:
-            print("error decompressing {0}: {1}".format(file, e))
-            traceback.print_exc()
-            continue
+        input_filepath = os.path.join(input_dir, file)
         
-        stats.append([name, *pil_img.size, (pil_img.size[0]*pil_img.size[1]*3)/1048576, png_size/1048576, jpeg_size/1048576, compressed_size/1048576])
-        print("file={0} compression={1:.1f}s decompression={2:.1f}s png={3} compressed={4} ratio={5:.2%}".format(file, t1-t, t2-t1, format_size(png_size), format_size(compressed_size), 1-(compressed_size/png_size)))
+        compression_stats = test_compress_image(input_filepath, output_dir)
+        stats.append(compression_stats)
+        
+        print("file={name} compression={time_com:.1f}s decompression={time_dec:.1f}s compressed={size_mimg:.0f}KiB jpeg={size_jpeg:.0f}KiB png={size_png:.0f}KiB".format(**compression_stats))
     
-    f = open("{0}.csv".format(time.time()), "w")
+    heading = list(stats[0].keys())
+
+    f = open("{0}.csv".format(time.strftime("%Y-%m-%d_%H-%M-%S")), "w")
+    f.write(";".join(heading) + "\n")
+
     for s in stats:
-        f.write(";".join([str(x).replace(",", ".") for x in s]))
+        values = [str(k).replace(".", ",") if type(k) == int or type(k) == float else str(k) for k in s.values()]
+
+        f.write(";".join(values))
         f.write("\n")
     f.close()
 
