@@ -32,6 +32,11 @@ ENTROPY_ZIGZAG_INVERSE = \
 
 ENTROPY_ZIGZAG = numpy.argsort(ENTROPY_ZIGZAG_INVERSE)
 
+## RGB -> YCoCg
+## R(0, 255) -> Y(0, 1)
+## G(0, 255) -> U(-0.5, 0.5)
+## B(0, 255) -> V(-0.5, 0.5)
+
 def RGB_YCOCG(pixels):
     m = [[1/4, 1/2, -1/4],
          [1/2, 0, 1/2],
@@ -197,7 +202,7 @@ class ImageCompression:
 
         yuv = RGB_YCOCG(numpy.array(pil_image))
 
-        chroma_size = (math.floor(img_w*self.chroma_scale[0]), math.floor(img_h*self.chroma_scale[1]))
+        chroma_size = math.floor(img_w*self.chroma_scale[0]), math.floor(img_h*self.chroma_scale[1])
 
         y,u,v = numpy.dsplit(yuv, 3)
         y = y.reshape(img_h, img_w)
@@ -309,10 +314,7 @@ def test_compress_image(input_filepath, output_dir):
 
     return stats
 
-def test_compress_images():
-    input_dir = "test-images"
-    output_dir = "test-images-output"
-
+def test_compress_images(input_dir, output_dir):
     stats = []
 
     print("Testing compression in {0}".format(input_dir))
@@ -337,7 +339,57 @@ def test_compress_images():
         f.write("\n")
     f.close()
 
+def convert_image_entropy_stats(pil_img, tile_size=8):
+    input_image = numpy.array(pil_img)
+
+    h,w,num_channels = input_image.shape
+
+    tiles_horiz = math.ceil(w/tile_size)
+    output_w = tiles_horiz*3
+    output_h = math.ceil(h/tile_size)
+
+    output = numpy.zeros((output_h, output_w, 3))
+
+    for c in range(num_channels):
+        channel = input_image[:,:,c]
+
+        chan_h, chan_w = channel.shape
+
+        num_tiles = 0
+        for j in range(math.ceil(chan_h/tile_size)):
+            for i in range(math.ceil(chan_w/tile_size)):
+                tile = numpy.zeros((tile_size, tile_size))
+
+                pixels = channel[j*tile_size : (j+1)*tile_size, i*tile_size : (i+1)*tile_size]
+                tile[0:pixels.shape[0], 0:pixels.shape[1]] = pixels
+
+                entropy = scipy.stats.entropy(tile.flatten())
+                if numpy.isnan(entropy):
+                    entropy = 0
+
+                output[j,c*tiles_horiz+i,:] = entropy, entropy, entropy
+    
+    im_min = numpy.min(output)
+    im_max = numpy.max(output)
+
+    output -= im_min
+    output /= (im_max-im_min)
+    output *= 255
+    output = numpy.rint(numpy.clip(output, 0, 255))
+
+    return Image.fromarray(output.astype(numpy.uint8))
+
+
 if __name__ == "__main__":
     import time
     import traceback
-    test_compress_images()
+    import scipy.stats
+
+    input_dir = "test-images"
+    output_dir = "test-images-output"
+
+    for f in os.listdir(input_dir):
+        im = convert_image_entropy_stats(Image.open(os.path.join(input_dir, f)).convert("RGB"))
+        im.save(os.path.join(output_dir, os.path.splitext(f)[0] + "_entropy.png"))
+
+    test_compress_images(input_dir, output_dir)

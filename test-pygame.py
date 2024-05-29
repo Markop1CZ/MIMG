@@ -33,7 +33,7 @@ while running:
         t3 = time.time()
         load = False
 
-        print("loading={0:.02f}s pygame={1:.02f}s total={2:.02f}".format(t2-t, t3-t2, t3-t))
+        print("loading={0:.02f}s pygame={1:.02f}s total={2:.02f}s".format(t2-t, t3-t2, t3-t))
 
     screen.fill((255, 255, 255))
 
