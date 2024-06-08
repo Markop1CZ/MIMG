@@ -53,6 +53,13 @@ def YCOCG_RGB(pixels):
     rgb = numpy.clip(rgb, 0, 255)
     return numpy.rint(rgb).astype(numpy.uint8)
 
+# def rle_encode(array):
+#     changes = numpy.flatnonzero(numpy.diff(array)) + 1
+#     values = numpy.r_[array[0], array[changes]]
+#     runlengths = numpy.diff(numpy.r_[0, changes, len(array)])
+
+#     return numpy.dstack((runlengths, values)).flatten()
+
 def rle_encode(array):
     t = array[0]
     c = 0
@@ -73,16 +80,7 @@ def rle_encode(array):
 def rle_decode(array):
     if len(array) %2 != 0:
         raise Exception("Not RLE!")
-
-    out = []
-    for i in range(math.floor(len(array)/2)):
-        idx = i*2
-        cnt = array[idx]
-        val = array[idx+1]
-
-        out.extend([val]*cnt)
-
-    return numpy.asarray(out)
+    return numpy.repeat(array[1:][::2], array[0:][::2])
 
 def resize_channel(pixels, w, h):
     return cv2.resize(pixels, (h, w), interpolation=cv2.INTER_AREA) 
@@ -384,12 +382,16 @@ if __name__ == "__main__":
     import time
     import traceback
     import scipy.stats
+    import cProfile
 
     input_dir = "test-images"
     output_dir = "test-images-output"
 
-    for f in os.listdir(input_dir):
-        im = convert_image_entropy_stats(Image.open(os.path.join(input_dir, f)).convert("RGB"))
-        im.save(os.path.join(output_dir, os.path.splitext(f)[0] + "_entropy.png"))
+    ##for f in os.listdir(input_dir):
+    ##    im = convert_image_entropy_stats(Image.open(os.path.join(input_dir, f)).convert("RGB"))
+    ##    im.save(os.path.join(output_dir, os.path.splitext(f)[0] + "_entropy.png"))
 
-    test_compress_images(input_dir, output_dir)
+    ##test_compress_image("test-images/photo-06.png", "test-images-output")
+    cProfile.run('test_compress_image("test-images/photo-01.png", "test-images-output")')
+
+    ##test_compress_images(input_dir, output_dir)
