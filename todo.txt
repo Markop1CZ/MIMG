@@ -1,0 +1,5 @@
+–write custom DCT functions from scipy.fft._pocketfft.realtransforms._r2r (skip iscomplexobj)
+–investigate callers of asarray
+–investigate callers of getattr
+–investigate fromnumeric
+–try to optimize RLE even more (around?)

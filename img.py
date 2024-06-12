@@ -75,7 +75,7 @@ def rle_encode(array):
 
     out.extend([c, t])
 
-    return numpy.asarray(out)
+    return bytes(out)
 
 def rle_decode(array):
     if len(array) %2 != 0:
@@ -107,18 +107,18 @@ class DCTCompression:
             num_tiles = 0
             for j in range(math.ceil(chan_h/tile_size)):
                 for i in range(math.ceil(chan_w/tile_size)):
-                    tile = numpy.zeros((tile_size, tile_size))
+                    tile = numpy.zeros((tile_size, tile_size), dtype=numpy.float32)
 
                     pixels = channel[i*tile_size : (i+1)*tile_size, j*tile_size : (j+1)*tile_size]
                     tile[0:pixels.shape[0], 0:pixels.shape[1]] = pixels
 
                     tile = dct(dct(tile.T, norm='ortho').T, norm='ortho')
                     tile /= self.dct_quant
-                    tile = numpy.around(tile, 0)
+                    tile = numpy.around(tile, 0).astype(numpy.uint8)
 
                     tile = tile.flatten()[ENTROPY_ZIGZAG]
 
-                    rle_tile = rle_encode(tile).astype(numpy.int8).tobytes()
+                    rle_tile = rle_encode(tile)
 
                     zlib_header += compressor.compress(struct.pack("H", len(rle_tile)))
                     zlib_header += compressor.compress(rle_tile)
@@ -236,7 +236,7 @@ class MImg:
         return MImg.load(open(filename, "rb"))
 
     @staticmethod
-    def load(f): 
+    def load(f):
         pil_image = ImageCompression.decompress(f)
         f.close()
 
@@ -377,12 +377,10 @@ def convert_image_entropy_stats(pil_img, tile_size=8):
 
     return Image.fromarray(output.astype(numpy.uint8))
 
-
 if __name__ == "__main__":
     import time
     import traceback
     import scipy.stats
-    import cProfile
 
     input_dir = "test-images"
     output_dir = "test-images-output"
@@ -391,7 +389,15 @@ if __name__ == "__main__":
     ##    im = convert_image_entropy_stats(Image.open(os.path.join(input_dir, f)).convert("RGB"))
     ##    im.save(os.path.join(output_dir, os.path.splitext(f)[0] + "_entropy.png"))
 
-    ##test_compress_image("test-images/photo-06.png", "test-images-output")
-    cProfile.run('test_compress_image("test-images/photo-01.png", "test-images-output")')
+    import cProfile
+    import pstats
+
+    pr = cProfile.Profile()
+    pr.enable()
+    pr.runcall(test_compress_image, "test-images/photo-01.png", "test-images-output")
+    pr.disable()
+
+    p = pstats.Stats(pr)
+    p.print_callers("iscomplexobj")
 
     ##test_compress_images(input_dir, output_dir)
