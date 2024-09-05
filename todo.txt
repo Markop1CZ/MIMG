@@ -1,5 +1,9 @@
+-find out how to use pypocketfft from scipy directly
+-or build https://gitlab.mpcdf.mpg.de/mtr/pypocketfft from source
+	-prepare WHL for use without compiler
 –write custom DCT functions from scipy.fft._pocketfft.realtransforms._r2r (skip iscomplexobj)
 –investigate callers of asarray
 –investigate callers of getattr
 –investigate fromnumeric
 –try to optimize RLE even more (around?)
+

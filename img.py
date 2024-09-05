@@ -4,8 +4,9 @@ import struct
 import os
 import zlib
 import cv2
+import scipy.fft._pocketfft.pypocketfft as pfft
 from PIL import Image
-from scipy.fftpack import dct, idct
+from scipy.fft import dctn, idctn
 from io import BytesIO
 
 FILE_SIG = b"MIMG"
@@ -85,6 +86,13 @@ def rle_decode(array):
 def resize_channel(pixels, w, h):
     return cv2.resize(pixels, (h, w), interpolation=cv2.INTER_AREA) 
 
+def img_dct(array):
+    return dctn(array, 2, None, (-1, ), "ortho")
+
+def img_idct(array):
+    return idctn(array, 2, None, (-1, ), "ortho")
+    ##return pfft.dct(array, 3, (-1, ), 1, None, 1, None)
+
 class DCTCompression:
     def __init__(self, tile_size=8, dct_quant=None):
         self.dct_quant = dct_quant if not dct_quant is None else DCT_QUANT_DEFAULT
@@ -112,7 +120,8 @@ class DCTCompression:
                     pixels = channel[i*tile_size : (i+1)*tile_size, j*tile_size : (j+1)*tile_size]
                     tile[0:pixels.shape[0], 0:pixels.shape[1]] = pixels
 
-                    tile = dct(dct(tile.T, norm='ortho').T, norm='ortho')
+                    tile = img_dct(img_dct(tile.T).T)
+
                     tile /= self.dct_quant
                     tile = numpy.around(tile, 0).astype(numpy.uint8)
 
@@ -153,7 +162,7 @@ class DCTCompression:
                 tile = tile[ENTROPY_ZIGZAG_INVERSE].reshape(tile_size, tile_size)
                 
                 tile = tile*dct_quant
-                tile = idct(idct(tile.T, norm='ortho').T, norm='ortho')
+                tile = img_idct(img_idct(tile.T).T)
 
                 output_channel[i:i+tile_size, j:j+tile_size] = tile
 
@@ -398,6 +407,7 @@ if __name__ == "__main__":
     pr.disable()
 
     p = pstats.Stats(pr)
-    p.print_callers("iscomplexobj")
+    p.strip_dirs().sort_stats("cumtime").print_stats()
+    ##p.print_callers("asarray") ##_r2rn, iscomplexobj
 
     ##test_compress_images(input_dir, output_dir)
