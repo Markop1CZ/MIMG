@@ -4,9 +4,8 @@ import struct
 import os
 import zlib
 import cv2
-import scipy.fft._pocketfft.pypocketfft as pfft
+from transform import img_dct, img_idct
 from PIL import Image
-from scipy.fft import dctn, idctn
 from io import BytesIO
 
 FILE_SIG = b"MIMG"
@@ -54,13 +53,6 @@ def YCOCG_RGB(pixels):
     rgb = numpy.clip(rgb, 0, 255)
     return numpy.rint(rgb).astype(numpy.uint8)
 
-# def rle_encode(array):
-#     changes = numpy.flatnonzero(numpy.diff(array)) + 1
-#     values = numpy.r_[array[0], array[changes]]
-#     runlengths = numpy.diff(numpy.r_[0, changes, len(array)])
-
-#     return numpy.dstack((runlengths, values)).flatten()
-
 def rle_encode(array):
     t = array[0]
     c = 0
@@ -71,7 +63,6 @@ def rle_encode(array):
             out.extend([c, t])
             t = array[i]
             c = 0
-
         c += 1
 
     out.extend([c, t])
@@ -85,13 +76,6 @@ def rle_decode(array):
 
 def resize_channel(pixels, w, h):
     return cv2.resize(pixels, (h, w), interpolation=cv2.INTER_AREA) 
-
-def img_dct(array):
-    return dctn(array, 2, None, (-1, ), "ortho")
-
-def img_idct(array):
-    return idctn(array, 2, None, (-1, ), "ortho")
-    ##return pfft.dct(array, 3, (-1, ), 1, None, 1, None)
 
 class DCTCompression:
     def __init__(self, tile_size=8, dct_quant=None):
@@ -123,7 +107,7 @@ class DCTCompression:
                     tile = img_dct(img_dct(tile.T).T)
 
                     tile /= self.dct_quant
-                    tile = numpy.around(tile, 0).astype(numpy.uint8)
+                    tile = numpy.round(tile, decimals=0).astype(numpy.uint8)
 
                     tile = tile.flatten()[ENTROPY_ZIGZAG]
 
@@ -279,16 +263,7 @@ def test_compress_image(input_filepath, output_dir):
     output_filepath = os.path.join(output_dir, output_filename)
     pil_img = Image.open(input_filepath).convert("RGB")
 
-    jpeg_buf = BytesIO()
-    pil_img.save(jpeg_buf, format="jpeg", quality=35)
-    jpeg_size = jpeg_buf.getbuffer().nbytes
-
-    png_buf = BytesIO()
-    pil_img.save(png_buf, format="png")
-    png_size = png_buf.getbuffer().nbytes
-
-    del jpeg_buf
-    del png_buf
+    png_size, jpeg_size = test_get_image_png_jpeg_comparison(input_filepath, pil_img)
 
     t0 = time.time()
     try:
@@ -321,7 +296,47 @@ def test_compress_image(input_filepath, output_dir):
 
     return stats
 
+def test_get_image_png_jpeg_comparison(input_filepath, pil_img):
+    comparison_file = "images.json"
+
+    comparison = {}
+    if os.path.exists(comparison_file):
+        f = open(comparison_file, "r")
+        comparison = json.loads(f.read())
+        f.close()
+
+    sha1 = hashlib.sha1()
+    with open(input_filepath, "rb") as f:
+        while True:
+            data = f.read(65536)
+            if not data:
+                break
+            sha1.update(data)
+
+    file_hash = sha1.hexdigest()
+
+    if file_hash in comparison:
+        result = comparison[file_hash]
+    else:
+        png_buf = BytesIO()
+        pil_img.save(png_buf, format="png")
+        png_size = png_buf.getbuffer().nbytes
+
+        jpeg_buf = BytesIO()
+        pil_img.save(jpeg_buf, format="jpeg", quality=35)
+        jpeg_size = jpeg_buf.getbuffer().nbytes
+
+        result = [png_size, jpeg_size]
+        comparison[file_hash] = result
+
+    f = open(comparison_file, "w")
+    f.write(json.dumps(comparison))
+    f.close()
+
+    return result
+
 def test_compress_images(input_dir, output_dir):
+    import hashlib
     stats = []
 
     print("Testing compression in {0}".format(input_dir))
@@ -386,10 +401,25 @@ def convert_image_entropy_stats(pil_img, tile_size=8):
 
     return Image.fromarray(output.astype(numpy.uint8))
 
+def test_cprofile():
+    import cProfile
+    import pstats
+
+    pr = cProfile.Profile()
+    pr.enable()
+    pr.runcall(test_compress_image, "test-images/render-03.png", "test-images-output")
+    pr.disable()
+
+    p = pstats.Stats(pr)
+    p.strip_dirs().sort_stats("cumtime").print_stats()
+    p.print_callers("_wrapfunc") ##asarray, _r2rn, iscomplexobj
+
 if __name__ == "__main__":
     import time
     import traceback
     import scipy.stats
+    import json
+    import hashlib
 
     input_dir = "test-images"
     output_dir = "test-images-output"
@@ -398,16 +428,6 @@ if __name__ == "__main__":
     ##    im = convert_image_entropy_stats(Image.open(os.path.join(input_dir, f)).convert("RGB"))
     ##    im.save(os.path.join(output_dir, os.path.splitext(f)[0] + "_entropy.png"))
 
-    import cProfile
-    import pstats
+    ##test_cprofile()
 
-    pr = cProfile.Profile()
-    pr.enable()
-    pr.runcall(test_compress_image, "test-images/photo-01.png", "test-images-output")
-    pr.disable()
-
-    p = pstats.Stats(pr)
-    p.strip_dirs().sort_stats("cumtime").print_stats()
-    ##p.print_callers("asarray") ##_r2rn, iscomplexobj
-
-    ##test_compress_images(input_dir, output_dir)
+    test_compress_images(input_dir, output_dir)
