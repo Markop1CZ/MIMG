@@ -110,11 +110,15 @@ class DCTCompression:
                     tile = numpy.round(tile, decimals=0).astype(numpy.uint8)
 
                     tile = tile.flatten()[ENTROPY_ZIGZAG]
+                    
+                    tile_length = 0
+                    for k in range((tile_size*tile_size)-1, -1, -1):
+                        if tile[k] != 0:
+                            tile_length = k+1
+                            break
 
-                    rle_tile = rle_encode(tile)
-
-                    zlib_header += compressor.compress(struct.pack("H", len(rle_tile)))
-                    zlib_header += compressor.compress(rle_tile)
+                    zlib_header += compressor.compress(bytes([tile_length]))
+                    zlib_header += compressor.compress(tile[0:tile_length])
                     num_tiles += 1
 
             compressed_channel = zlib_header + compressor.flush()
@@ -139,10 +143,11 @@ class DCTCompression:
             i = 0
             j = 0
             for t in range(num_tiles):
-                tile_length, = struct.unpack("H", channel.read(2))
+                tile_length, = channel.read(1)
 
                 compressed_tile = channel.read(tile_length)
-                tile = rle_decode(numpy.frombuffer(compressed_tile, numpy.int8))
+                tile = numpy.zeros(tile_size*tile_size)
+                tile[0:tile_length] = numpy.frombuffer(compressed_tile, numpy.int8)
                 tile = tile[ENTROPY_ZIGZAG_INVERSE].reshape(tile_size, tile_size)
                 
                 tile = tile*dct_quant
