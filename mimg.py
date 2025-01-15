@@ -1,12 +1,13 @@
 import math
 import numpy
 import struct
-import os
 import zlib
 import cv2
-from transform import img_dct, img_idct
+import scipy.fft._pocketfft.pypocketfft as pfft
 from PIL import Image
 from io import BytesIO
+from scipy.fft._pocketfft.helper import (_asfarray, _init_nd_shape_and_axes, _datacopied,
+                     _fix_shape, _fix_shape_1d, _normalization, _workers)
 
 FILE_SIG = b"MIMG"
 
@@ -32,7 +33,10 @@ ENTROPY_ZIGZAG_INVERSE = \
 
 ENTROPY_ZIGZAG = numpy.argsort(ENTROPY_ZIGZAG_INVERSE)
 
+## 
 ## RGB -> YCoCg
+##
+
 ## R(0, 255) -> Y(0, 1)
 ## G(0, 255) -> U(-0.5, 0.5)
 ## B(0, 255) -> V(-0.5, 0.5)
@@ -53,29 +57,28 @@ def YCOCG_RGB(pixels):
     rgb = numpy.clip(rgb, 0, 255)
     return numpy.rint(rgb).astype(numpy.uint8)
 
-def rle_encode(array):
-    t = array[0]
-    c = 0
-
-    out = []
-    for i in range(len(array)):
-        if array[i] != t:
-            out.extend([c, t])
-            t = array[i]
-            c = 0
-        c += 1
-
-    out.extend([c, t])
-
-    return bytes(out)
-
-def rle_decode(array):
-    if len(array) %2 != 0:
-        raise Exception("Not RLE!")
-    return numpy.repeat(array[1:][::2], array[0:][::2])
-
 def resize_channel(pixels, w, h):
-    return cv2.resize(pixels, (h, w), interpolation=cv2.INTER_AREA) 
+    return cv2.resize(pixels, (h, w), interpolation=cv2.INTER_AREA)
+
+##
+## DCT
+##
+
+num_workers = _workers(None)
+
+def img_dct(x, type=2, n=None, axis=-1, norm="ortho"):
+    tmp = x.astype(numpy.float32)
+    norm = _normalization(norm, True)
+    out = tmp
+
+    return pfft.dct(tmp, type, (axis,), norm, out, num_workers, None)
+
+def img_idct(x, type=3, n=None, axis=-1, norm="ortho"):
+    tmp = x.astype(numpy.float32)
+    norm = _normalization(norm, True)
+    out = tmp
+
+    return pfft.dct(tmp, type, (axis,), norm, out, num_workers, None)
 
 class DCTCompression:
     def __init__(self, tile_size=8, dct_quant=None):
@@ -226,213 +229,27 @@ class MImg:
         return MImg(pil_img)
 
     @staticmethod
-    def from_buffer(buf):
-        return MImg.load(BytesIO(buf))
-
-    @staticmethod
-    def from_file(filename):
-        return MImg.load(open(filename, "rb"))
-
-    @staticmethod
-    def load(f):
+    def _from_file(f):
         pil_image = ImageCompression.decompress(f)
-        f.close()
-
         return MImg(pil_image)
-
-    def save(self, f):
-        self.compression.compress(f, self._image)
-        f.close()
-
-    def to_file(self, filename):
-        self.save(open(filename, "wb"))
-
-def format_size(num, suffix="B"):
-    for unit in ("", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"):
-        if abs(num) < 1024.0:
-            return f"{num:3.1f}{unit}{suffix}"
-        num /= 1024.0
-    return f"{num:.1f}Yi{suffix}"
-
-def test_compress_image(input_filepath, output_dir):
-    kb = 1024
-    if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
-
-    stats = {}
-
-    input_filename = os.path.basename(input_filepath)
-    name,ext = os.path.splitext(input_filename)
-
-    output_filename = "{0}.buf".format(name)
-    output_filepath = os.path.join(output_dir, output_filename)
-    pil_img = Image.open(input_filepath).convert("RGB")
-
-    png_size, jpeg_size = test_get_image_png_jpeg_comparison(input_filepath, pil_img)
-
-    t0 = time.time()
-    try:
-        img = MImg(pil_img)
-        img.to_file(output_filepath)
-        mimg_size = os.stat(output_filepath).st_size
-    except Exception as e:
-        print("Error compressing {0}:".format(input_filename))
-        traceback.print_exc()
-        return 
-    t1 = time.time()
-
-    try:
-        img2 = MImg.from_file(output_filepath)
-        img2._image.save(os.path.join(output_dir, "{0}.png".format(name)))
-    except Exception as e:
-        print("Error decompressing {0}:".format(output_filename))
-        traceback.print_exc()
-        return
-    t2 = time.time()
-
-    stats["name"] = name
-    stats["width"], stats["height"] = pil_img.size
-    stats["size_raw"] = (3 * pil_img.size[0] * pil_img.size[1]) / kb
-    stats["size_mimg"] = mimg_size / kb
-    stats["size_png"] = png_size / kb
-    stats["size_jpeg"] = jpeg_size / kb
-    stats["time_com"] = t1 - t0
-    stats["time_dec"] = t2 - t1
-
-    return stats
-
-def test_get_image_png_jpeg_comparison(input_filepath, pil_img):
-    comparison_file = "images.json"
-
-    comparison = {}
-    if os.path.exists(comparison_file):
-        f = open(comparison_file, "r")
-        comparison = json.loads(f.read())
-        f.close()
-
-    sha1 = hashlib.sha1()
-    with open(input_filepath, "rb") as f:
-        while True:
-            data = f.read(65536)
-            if not data:
-                break
-            sha1.update(data)
-
-    file_hash = sha1.hexdigest()
-
-    if file_hash in comparison:
-        result = comparison[file_hash]
-    else:
-        png_buf = BytesIO()
-        pil_img.save(png_buf, format="png")
-        png_size = png_buf.getbuffer().nbytes
-
-        jpeg_buf = BytesIO()
-        pil_img.save(jpeg_buf, format="jpeg", quality=35)
-        jpeg_size = jpeg_buf.getbuffer().nbytes
-
-        result = [png_size, jpeg_size]
-        comparison[file_hash] = result
-
-    f = open(comparison_file, "w")
-    f.write(json.dumps(comparison))
-    f.close()
-
-    return result
-
-def test_compress_images(input_dir, output_dir):
-    import hashlib
-    stats = []
-
-    print("Testing compression in {0}".format(input_dir))
     
-    for file in os.listdir(input_dir):
-        input_filepath = os.path.join(input_dir, file)
-        
-        compression_stats = test_compress_image(input_filepath, output_dir)
-        stats.append(compression_stats)
-        
-        print("file={name} compression={time_com:.1f}s decompression={time_dec:.1f}s compressed={size_mimg:.0f}KiB jpeg={size_jpeg:.0f}KiB png={size_png:.0f}KiB".format(**compression_stats))
+    @staticmethod
+    def from_buffer(buf):
+        return MImg._from_file(BytesIO(buf))
     
-    heading = list(stats[0].keys())
-
-    f = open("{0}.csv".format(time.strftime("%Y-%m-%d_%H-%M-%S")), "w")
-    f.write(";".join(heading) + "\n")
-
-    for s in stats:
-        values = [str(k).replace(".", ",") if type(k) == int or type(k) == float else str(k) for k in s.values()]
-
-        f.write(";".join(values))
-        f.write("\n")
-    f.close()
-
-def convert_image_entropy_stats(pil_img, tile_size=8):
-    input_image = numpy.array(pil_img)
-
-    h,w,num_channels = input_image.shape
-
-    tiles_horiz = math.ceil(w/tile_size)
-    output_w = tiles_horiz*3
-    output_h = math.ceil(h/tile_size)
-
-    output = numpy.zeros((output_h, output_w, 3))
-
-    for c in range(num_channels):
-        channel = input_image[:,:,c]
-
-        chan_h, chan_w = channel.shape
-
-        num_tiles = 0
-        for j in range(math.ceil(chan_h/tile_size)):
-            for i in range(math.ceil(chan_w/tile_size)):
-                tile = numpy.zeros((tile_size, tile_size))
-
-                pixels = channel[j*tile_size : (j+1)*tile_size, i*tile_size : (i+1)*tile_size]
-                tile[0:pixels.shape[0], 0:pixels.shape[1]] = pixels
-
-                entropy = scipy.stats.entropy(tile.flatten())
-                if numpy.isnan(entropy):
-                    entropy = 0
-
-                output[j,c*tiles_horiz+i,:] = entropy, entropy, entropy
     
-    im_min = numpy.min(output)
-    im_max = numpy.max(output)
+    @staticmethod
+    def open(filename):
+        with open(filename, "rb") as f:
+            return MImg._from_file(f)
 
-    output -= im_min
-    output /= (im_max-im_min)
-    output *= 255
-    output = numpy.rint(numpy.clip(output, 0, 255))
-
-    return Image.fromarray(output.astype(numpy.uint8))
-
-def test_cprofile():
-    import cProfile
-    import pstats
-
-    pr = cProfile.Profile()
-    pr.enable()
-    pr.runcall(test_compress_image, "test-images/render-03.png", "test-images-output")
-    pr.disable()
-
-    p = pstats.Stats(pr)
-    p.strip_dirs().sort_stats("cumtime").print_stats()
-    p.print_callers("_wrapfunc") ##asarray, _r2rn, iscomplexobj
+    def save(self, filename):
+        with open(filename, "wb") as f:
+            self.compression.compress(f, self._image)
 
 if __name__ == "__main__":
-    import time
-    import traceback
-    import scipy.stats
-    import json
-    import hashlib
-
-    input_dir = "test-images"
-    output_dir = "test-images-output"
-
-    ##for f in os.listdir(input_dir):
-    ##    im = convert_image_entropy_stats(Image.open(os.path.join(input_dir, f)).convert("RGB"))
-    ##    im.save(os.path.join(output_dir, os.path.splitext(f)[0] + "_entropy.png"))
-
-    ##test_cprofile()
-
-    test_compress_images(input_dir, output_dir)
+    image = MImg.from_image("test-images/photo-01.png")
+    image.save("test-images-output/photo-01.buf")
+    
+    image2 = MImg.open("test-images-output/photo-01.buf")
+    image2._image.show()

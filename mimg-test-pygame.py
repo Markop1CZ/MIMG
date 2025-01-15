@@ -2,7 +2,7 @@ import pygame
 import os
 import time
 from PIL import Image
-from img import MImg
+from mimg import MImg
 
 img_dir = "test-images-output"
 img_ext = ".buf"
