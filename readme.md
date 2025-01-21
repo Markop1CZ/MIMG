@@ -7,7 +7,7 @@ Uses the [YCoCg](https://en.wikipedia.org/wiki/YCoCg) color model, default chrom
 
 This is how the algorithm performs on photos: [Test image source](https://commons.wikimedia.org/wiki/File:Morgan_House_Kalimpong_2.jpg)
 
-![Test image](https://files.markop1.cz/mimg/photo-02-original.png)
+![Test image](./test-images/photo-02.png)
 
 The same photo compressed using MIMG
 
