@@ -1,9 +1,5 @@
 test-images-output
-test-images-output-bin
-test-random-images
-test-random-images-output
 test-images-preview
-ycocg-test.png
-dct-test-out.png
+test-images-stats
 __pycache__
 *.csv
